@@ -224,12 +224,12 @@ def load_vlm_points(cfg: Config, path: str | None = None):
 
     try:
         import geopandas as gpd
-        from shapely.geometry import box, points_from_xy
+        from shapely.geometry import box
     except ImportError as exc:  # pragma: no cover - optional geospatial dependencies
         raise InputError("GeoDataFrame output requires the 'geo' dependencies; install with pip install -e '.[geo]'") from exc
     result = gpd.GeoDataFrame(
         clipped[["pt_id", "vlm_mm_yr", "source", "lon", "lat"]].reset_index(drop=True),
-        geometry=points_from_xy(clipped["lon"], clipped["lat"]), crs="EPSG:4326",
+        geometry=gpd.points_from_xy(clipped["lon"], clipped["lat"]), crs="EPSG:4326",
     )
 
     # Project for metric area/density calculations while preserving the public

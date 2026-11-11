@@ -218,7 +218,7 @@ def load_vlm_points(cfg: Config, path: str | None = None):
     clipped["lon"] = lon.loc[inside].to_numpy()
     clipped["lat"] = lat.loc[inside].to_numpy()
     clipped["pt_id"] = clipped["pt_id"].astype(str)
-    clipped["vlm_mm_yr"] = values.loc[inside].to_numpy()
+    clipped["vlm_mm_yr"] = values[inside]
     if "source" not in clipped.columns:
         clipped["source"] = "vt-in-v2"
 

@@ -208,6 +208,19 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Project data and generated outputs (keep source manifests and synthetic fixtures)
+data/raw/**
+data/pack/**
+!data/pack/.gitkeep
+out/
+insar/outputs/
+*.pmtiles
+*.parquet
+web/node_modules/
+web/dist/
+.env.*
+!.env.example
+
 # PyPI configuration file
 .pypirc
 

@@ -1,0 +1,26 @@
+contract: C6@1.0
+city: chennai
+display_name: Chennai
+utm_epsg: 32644
+bbox: [80.10, 12.85, 80.35, 13.25]
+seed: 42
+paths:
+  pack_dir: data/pack/chennai-pack-1.0.0
+  out_dir: out/chennai
+params:
+  radius_m: 100
+  min_points: 3
+  pair_min_m: 10
+  pair_max_m: 60
+  footprint_buffer_m: 20
+  horizon_years: 10
+  class_edges_ratio: [1000, 500]
+  sinking_threshold_mm_yr: -4
+  coverage_min: 0.5
+  grid_m: 250
+  cell_min_buildings: 5
+  sens_draws: 500
+  sens_concentration: 50
+  radius_variants_m: [50, 100, 150]
+weights: {i1: 0.30, i2: 0.35, i3: 0.20, i4: 0.15}
+mode: public

@@ -1,0 +1,5 @@
+pt_id,lon,lat,vlm_mm_yr,source
+pt-001,77.0010,28.6010,-10.0,synthetic
+pt-002,77.0012,28.6010,-6.0,synthetic
+pt-003,77.0014,28.6010,-8.0,synthetic
+pt-004,77.0110,28.6010,-2.0,synthetic

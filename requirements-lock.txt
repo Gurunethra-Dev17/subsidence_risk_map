@@ -1,0 +1,5 @@
+# Lightweight H0 runtime pins; package-specific dependencies can be added by owners.
+jsonschema==4.23.0
+PyYAML==6.0.2
+pytest==8.3.4
+ruff==0.8.4

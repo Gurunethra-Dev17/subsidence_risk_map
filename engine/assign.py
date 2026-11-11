@@ -25,6 +25,58 @@ def _weighted_quantile(values, weights, quantile: float) -> float:
                            left=sorted_values[0], right=sorted_values[-1]))
 
 
+def _assign_projected(building_coords, point_coords, rates, radius_m: float,
+                      min_points: int, chunk_size: int):
+    """Core radius assignment over already projected coordinate arrays."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    building_coords = np.asarray(building_coords, dtype=float).reshape((-1, 2))
+    point_coords = np.asarray(point_coords, dtype=float).reshape((-1, 2))
+    rates = np.asarray(rates, dtype=float)
+    if len(point_coords) != len(rates):
+        raise AssignmentError("each point coordinate must have one VLM rate")
+    if not np.isfinite(point_coords).all() or not np.isfinite(rates).all():
+        raise AssignmentError("point coordinates and VLM rates must be finite")
+
+    n_buildings = len(building_coords)
+    counts = np.zeros(n_buildings, dtype=np.int32)
+    estimates = np.full(n_buildings, np.nan, dtype=np.float64)
+    iqrs = np.full(n_buildings, np.nan, dtype=np.float64)
+    if len(point_coords) == 0:
+        return counts, estimates, iqrs
+
+    tree = cKDTree(point_coords)
+    valid_centroids = np.isfinite(building_coords).all(axis=1)
+    for start in range(0, n_buildings, chunk_size):
+        stop = min(start + chunk_size, n_buildings)
+        coords = building_coords[start:stop]
+        valid_positions = np.flatnonzero(valid_centroids[start:stop])
+        if not len(valid_positions):
+            continue
+        neighbors = tree.query_ball_point(coords[valid_positions], r=radius_m)
+        for local_position, indices in zip(valid_positions, neighbors):
+            row = start + int(local_position)
+            counts[row] = len(indices)
+            if len(indices) < min_points:
+                continue
+            idx = np.asarray(indices, dtype=np.intp)
+            distances = np.linalg.norm(point_coords[idx] - coords[local_position], axis=1)
+            exact = distances <= np.finfo(float).eps
+            if exact.any():
+                values = rates[idx[exact]]
+                weights = np.ones(len(values), dtype=float)
+            else:
+                values = rates[idx]
+                weights = 1.0 / distances
+            estimates[row] = _weighted_quantile(values, weights, 0.5)
+            iqrs[row] = (
+                _weighted_quantile(values, weights, 0.75)
+                - _weighted_quantile(values, weights, 0.25)
+            )
+    return counts, estimates, iqrs
+
+
 def assign_points_to_buildings(buildings, points, cfg, chunk_size: int = 50_000):
     """Estimate VLM for each building from points within the configured radius.
 
@@ -45,7 +97,7 @@ def assign_points_to_buildings(buildings, points, cfg, chunk_size: int = 50_000)
         import geopandas as gpd
         import numpy as np
         import pandas as pd
-        from scipy.spatial import cKDTree
+        import scipy  # noqa: F401
     except ImportError as exc:  # pragma: no cover - depends on optional geo extra
         raise AssignmentError(
             "Building assignment requires the 'geo' dependencies; "
@@ -103,53 +155,10 @@ def assign_points_to_buildings(buildings, points, cfg, chunk_size: int = 50_000)
         raise AssignmentError("point geometries must project to finite UTM coordinates")
     building_ids = buildings["bldg_id"].astype(str).to_numpy()
     n_buildings = len(buildings)
-    if len(point_coords) == 0:
-        empty_result = pd.DataFrame({
-            "bldg_id": building_ids,
-            "n_points": np.zeros(n_buildings, dtype=np.int32),
-            "vlm_mm_yr": np.full(n_buildings, np.nan),
-            "vlm_iqr_mm_yr": np.full(n_buildings, np.nan),
-            "sparse": np.ones(n_buildings, dtype=bool),
-        })
-        empty_result.attrs.update({
-            "utm_epsg": int(cfg.utm_epsg), "radius_m": radius_m, "min_points": min_points,
-        })
-        return empty_result
-    tree = cKDTree(point_coords)
-    centroid_x = centroids.x.to_numpy(dtype=float)
-    centroid_y = centroids.y.to_numpy(dtype=float)
-    valid_centroids = np.isfinite(centroid_x) & np.isfinite(centroid_y)
-
-    counts = np.zeros(n_buildings, dtype=np.int32)
-    estimates = np.full(n_buildings, np.nan, dtype=np.float64)
-    iqrs = np.full(n_buildings, np.nan, dtype=np.float64)
-    for start in range(0, n_buildings, chunk_size):
-        stop = min(start + chunk_size, n_buildings)
-        coords = np.column_stack((centroid_x[start:stop], centroid_y[start:stop]))
-        chunk_valid = valid_centroids[start:stop]
-        valid_positions = np.flatnonzero(chunk_valid)
-        if not len(valid_positions):
-            continue
-        neighbors = tree.query_ball_point(coords[valid_positions], r=radius_m)
-        for local_position, indices in zip(valid_positions, neighbors):
-            row = start + int(local_position)
-            counts[row] = len(indices)
-            if len(indices) < min_points:
-                continue
-            idx = np.asarray(indices, dtype=np.intp)
-            distances = np.linalg.norm(point_coords[idx] - coords[local_position], axis=1)
-            exact = distances <= np.finfo(float).eps
-            if exact.any():
-                values = rates[idx[exact]]
-                weights = np.ones(len(values), dtype=float)
-            else:
-                values = rates[idx]
-                weights = 1.0 / distances
-            estimates[row] = _weighted_quantile(values, weights, 0.5)
-            iqrs[row] = (
-                _weighted_quantile(values, weights, 0.75)
-                - _weighted_quantile(values, weights, 0.25)
-            )
+    centroid_coords = np.column_stack((centroids.x.to_numpy(dtype=float), centroids.y.to_numpy(dtype=float)))
+    counts, estimates, iqrs = _assign_projected(
+        centroid_coords, point_coords, rates, radius_m, min_points, chunk_size,
+    )
 
     sparse = counts < min_points
     result = pd.DataFrame({

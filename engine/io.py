@@ -66,6 +66,37 @@ def _repo_root(config_path: Path) -> Path:
     return config_path.parent.parent if config_path.parent.name == "configs" else config_path.parent
 
 
+def _normalize_vlm_values(values, source_column: str):
+    """Convert supported source columns into finite mm/yr values."""
+    try:
+        import numpy as np
+        numeric = np.asarray(values, dtype=float)
+    except (ImportError, TypeError, ValueError) as exc:
+        raise InputError("VLM coordinates and rates must be numeric") from exc
+    if source_column == "vlm_mm_yr":
+        source_unit, multiplier = "mm/yr", 1.0
+    elif source_column in {"vlm_cm_yr", "vlm"}:
+        source_unit, multiplier = "cm/yr", 10.0
+    else:
+        raise InputError(f"Unsupported VLM rate column {source_column!r}")
+    normalized = numeric * multiplier
+    if not np.isfinite(normalized).all():
+        raise InputError("VLM rates must be finite numbers")
+    return normalized, source_unit
+
+
+def _bbox_mask(lon, lat, bbox):
+    """Return the inclusive lon/lat bounding-box mask for point coordinates."""
+    import numpy as np
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return (
+        np.isfinite(lon) & np.isfinite(lat)
+        & (lon >= min_lon) & (lon <= max_lon)
+        & (lat >= min_lat) & (lat <= max_lat)
+    )
+
+
 def load_config(path: str) -> Config:
     """Load and validate a C6 YAML file; resolve configured paths consistently."""
     config_path = Path(path).expanduser().resolve()
@@ -150,11 +181,11 @@ def load_vlm_points(cfg: Config, path: str | None = None):
 
     frame = _read_points(source_path)
     if "vlm_mm_yr" in frame.columns:
-        value_col, source_unit, multiplier = "vlm_mm_yr", "mm/yr", 1.0
+        value_col = "vlm_mm_yr"
     elif "vlm_cm_yr" in frame.columns:
-        value_col, source_unit, multiplier = "vlm_cm_yr", "cm/yr", 10.0
+        value_col = "vlm_cm_yr"
     elif "vlm" in frame.columns:
-        value_col, source_unit, multiplier = "vlm", "cm/yr", 10.0
+        value_col = "vlm"
     else:
         raise InputError("VLM points need vlm_mm_yr, vlm_cm_yr, or vlm values")
     for column in ("lon", "lat"):
@@ -164,12 +195,15 @@ def load_vlm_points(cfg: Config, path: str | None = None):
         raise InputError("VLM points are missing required 'pt_id' column")
 
     try:
+        import numpy as np
         lon = frame["lon"].astype(float)
         lat = frame["lat"].astype(float)
-        values = frame[value_col].astype(float) * multiplier
+        values, source_unit = _normalize_vlm_values(frame[value_col], value_col)
     except (TypeError, ValueError) as exc:
+        if isinstance(exc, InputError):
+            raise
         raise InputError("VLM coordinates and rates must be numeric") from exc
-    valid = lon.map(math.isfinite) & lat.map(math.isfinite) & values.map(math.isfinite)
+    valid = lon.map(math.isfinite) & lat.map(math.isfinite) & np.isfinite(values)
     valid &= lon.between(-180, 180) & lat.between(-90, 90)
     if not valid.all():
         raise InputError(f"VLM input has {int((~valid).sum())} missing, non-finite, or invalid coordinate/rate row(s)")
@@ -179,7 +213,7 @@ def load_vlm_points(cfg: Config, path: str | None = None):
         raise InputError("VLM point IDs must be unique")
 
     min_lon, min_lat, max_lon, max_lat = cfg.bbox
-    inside = lon.between(min_lon, max_lon) & lat.between(min_lat, max_lat)
+    inside = _bbox_mask(lon.to_numpy(), lat.to_numpy(), cfg.bbox)
     clipped = frame.loc[inside].copy()
     clipped["lon"] = lon.loc[inside].to_numpy()
     clipped["lat"] = lat.loc[inside].to_numpy()

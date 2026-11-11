@@ -9,7 +9,7 @@ This document records what has been implemented in the repository so far, how it
 
 The shared H0 repository scaffold was committed to `main`. Person A then added the C6/VLM input loader and the building point-assignment module on a feature branch. A packaging configuration problem found while investigating a failed CI run was fixed on that branch. The feature branch has been pushed to GitHub.
 
-The core geospatial engine is still in progress. The distortion module (A3), engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
+The core geospatial engine is still in progress. A1/A2 tests have now been added; their pure calculation and configuration coverage passes locally. The GeoDataFrame integration checks are skipped locally because the environment blocks a Pandas DLL. The distortion module (A3), engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
 
 ## Work completed
 
@@ -50,12 +50,16 @@ Commit `393566c` — `engine: assign motion points to buildings` — added `engi
 - Buildings below the minimum, including all buildings when the point input is empty, are marked sparse and receive null estimates.
 - The result preserves building order and includes `bldg_id`, `n_points`, `vlm_mm_yr`, `vlm_iqr_mm_yr`, and `sparse`.
 
+New synthetic tests cover source-unit conversion, bbox boundaries, weighted quantiles, radius counts, exact-coordinate weighting, sparse/empty inputs, output ordering, and the public loader/assignment interfaces.
+
 ## Checks performed
 
 - The contract validator passed for the six schema-backed fixtures after the initial setup and again during the packaging fix.
 - `load_config('configs/delhi.yaml')` returned the expected city, UTM EPSG, bbox, and resolved pack path.
 - Python syntax compilation passed for `engine/io.py` and `engine/assign.py`.
 - `git diff --check` passed for the A2 change.
+- `python -m pytest -q` completed with **9 passed, 2 skipped**. The skipped tests exercise the full GeoDataFrame point-loader and assignment interfaces; both are skipped only when the local Application Control policy blocks Pandas' `interval` DLL. Other import failures remain test failures.
+- CI now installs the `geo` extra and runs `make test` so those two integration tests execute in the Linux workflow environment.
 - A local editable-install dry run reproduced the initial setuptools flat-layout discovery error. After package discovery was configured, a no-build-isolation dry run reached a separate local limitation: this environment lacks the `bdist_wheel` command. The GitHub runner uses normal build isolation with the declared `setuptools` and `wheel` build requirements; its rerun result has not been confirmed here.
 
 No package unit tests or full engine runs have been performed. In particular, the installed GeoPandas/Pandas stack in this environment fails to import because an Application Control policy blocks a DLL, so the spatial execution path was not exercised here.
@@ -72,8 +76,8 @@ No package unit tests or full engine runs have been performed. In particular, th
 | Plan item | Status | Notes |
 |---|---|---|
 | A0 / shared scaffold | Starter committed | Contract validation passes; full end-to-end mock demo for each package is not implemented yet. |
-| A1 config and point loader | Implemented | Config load checked; geospatial point execution awaits a working GeoPandas environment. |
-| A2 point-to-building assignment | Implemented | Syntax and whitespace checks passed; spatial runtime and unit tests remain. |
+| A1 config and point loader | Implemented | Config and pure conversion/bbox logic checked; GeoDataFrame integration test is skipped locally due to the blocked DLL. |
+| A2 point-to-building assignment | Implemented | Pure spatial assignment calculations pass; public GeoDataFrame integration test is skipped locally due to the blocked DLL. |
 | A3 building distortion | Not started | Next Person A engine task. |
 | H1 real C0 data pack | Not started | B owns the dataset audit and real pack preparation. |
 | H2 C1 output from real data | Not started | Depends on the real pack and the remaining engine work. |

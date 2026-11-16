@@ -9,7 +9,7 @@ This document records what has been implemented in the repository so far, how it
 
 The shared H0 repository scaffold was committed to `main`. Person A has implemented the C6/VLM input loader and building point-assignment module on `a/config-point-loaders`. A CI failure caused by an incorrect Shapely import in the VLM loader was fixed in commit `e298e3f` and pushed. GitHub Actions CI run #8 passed on the updated branch; PR #1 is open: https://github.com/Gurunethra-Dev17/subsidence_risk_map/pull/1. The C4@1.0 OpenAPI description has been aligned on `a/c4-openapi-alignment`; the API implementation remains outstanding.
 
-The core geospatial engine is still in progress. A1/A2 are implemented, and the focused VLM loader integration test passes locally. A3 angular-distortion calculation is implemented on `a/building-distortion`; its unit-test work is A4 and remains outstanding. Engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
+The core geospatial engine is still in progress. A1/A2 are implemented, and the focused VLM loader integration test passes locally. A3 angular-distortion calculation and A4 regression tests are implemented on `a/building-distortion`. Engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
 
 ## Work completed
 
@@ -23,7 +23,7 @@ Commit `8565e7a` — `setup: add shared project scaffold and contracts` — adde
 - The contract validator, Makefile commands, Python project metadata, and an initial GitHub Actions workflow.
 - Copies of the three supplied planning documents under `docs/`.
 
-The fixtures are deliberately small and synthetic. The mock C0 pack uses JSON and CSV stand-ins instead of the full GeoParquet/Parquet pack described in the contract. The tile fixtures are GeoJSON, not PMTiles.
+The fixtures are deliberately small and synthetic. The mock C0 pack still uses JSON and CSV stand-ins instead of the full GeoParquet pack described in the contract. A C1 `building_metrics.parquet` fixture has now been generated from the canonical C1 JSON fixture. The tile fixtures are GeoJSON, not PMTiles.
 
 ### Person A A1 — configuration and VLM point loading
 
@@ -61,7 +61,7 @@ New synthetic tests cover source-unit conversion, bbox boundaries, weighted quan
 - Computes absolute differential rate per pair, the building-level 90th percentile, and the configured horizon scenario.
 - Returns null distortion metrics for buildings with fewer than three pairs, formats the horizon ratio, and assigns `low`, `watch`, or `inspect` from the configured ratio edges.
 
-The A3 unit and worked-example tests belong to A4 and have not yet been added.
+A4 adds worked-example, public-interface regression, boundary, and permutation/sign-invariance checks for this calculation.
 
 ## Checks performed
 
@@ -75,7 +75,9 @@ The A3 unit and worked-example tests belong to A4 and have not yet been added.
 - The subsequent CI run found a separate VLM loader import error: `points_from_xy` was imported from `shapely.geometry`, which does not provide it. Commit `e298e3f` now uses `geopandas.points_from_xy`. The focused local integration test was attempted but skipped because local geo dependencies are unavailable. GitHub Actions CI run #8 on this commit completed successfully.
 - The focused VLM loader integration test was later run locally and passed (**1 passed**) after Smart App Control was turned off for the test environment.
 - The C4 OpenAPI document now includes response/error schemas, the `/buildings` query parameters, ETag and cache policy headers, and the configured-origin CORS policy. Its YAML parses successfully; API implementation and contract tests remain outstanding.
-- A3 implementation is on `a/building-distortion`; A4 tests and a full engine run remain outstanding.
+- A3 implementation and A4 tests are on `a/building-distortion`; full engine integration against the real pack remains outstanding.
+- The synthetic C1 Parquet fixture is readable through DuckDB and its `bldg_id` values match the three synthetic C0 JSON records. Per the C0/C1 contract, `bldg_id` is the join key. The actual C0 GeoParquet geometry fixture is still absent, so spatial integration awaits Person B's fixture/confirmation.
+- DuckDB is included in the `api` optional dependency extra for reproducible API installs.
 - A local editable-install dry run reproduced the initial setuptools flat-layout discovery error. After package discovery was configured, a no-build-isolation dry run reached a separate local limitation: this environment lacks the `bdist_wheel` command. The GitHub runner uses normal build isolation with the declared `setuptools` and `wheel` build requirements; its rerun result has not been confirmed here.
 
 The focused VLM loader integration test passes locally. A full engine run against the real Delhi data pack has not been performed because the pack is not present in the workspace.
@@ -95,8 +97,8 @@ The focused VLM loader integration test passes locally. A full engine run agains
 | A0 / shared scaffold | Starter committed | Contract validation passes; full end-to-end mock demo for each package is not implemented yet. |
 | A1 config and point loader | Implemented | Focused VLM CSV integration test passes locally; real Delhi pack integration awaits H1. |
 | A2 point-to-building assignment | Implemented | Pure assignment tests pass; real Delhi pack integration awaits H1. |
-| A3 building distortion | Implemented | Code is in `engine/distortion.py`; A4 must add worked-example and property tests. |
-| A4 distortion and regression tests | Not started | Next Person A task. |
+| A3 building distortion | Implemented | Code is in `engine/distortion.py`; emits the C1 building-level distortion fields. |
+| A4 distortion and regression tests | Implemented | `engine/tests/test_distortion.py` covers examples, public interface, thresholds, edge cases, and invariants; full local suite passes. |
 | C4 OpenAPI description | Updated | Response/error schemas, building query parameters, cache headers, and configured-origin CORS are documented; API runtime remains outstanding. |
 | H1 real C0 data pack | Not started | B owns the dataset audit and real pack preparation. |
 | H2 C1 output from real data | Not started | Depends on the real pack and the remaining engine work. |

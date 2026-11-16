@@ -11,7 +11,7 @@ dependencies = ["jsonschema>=4.23,<5", "PyYAML>=6.0,<7"]
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.8,<1"]
 geo = ["geopandas>=1.0,<2", "shapely>=2,<3", "pyproj>=3.7,<4", "pandas>=2.2,<3", "numpy>=2,<3", "scipy>=1.14,<2", "pyarrow>=18,<20", "duckdb>=1.1,<2", "rasterio>=1.4,<2", "matplotlib>=3.9,<4"]
-api = ["fastapi>=0.115,<1", "uvicorn>=0.32,<1", "pydantic>=2.9,<3"]
+api = ["fastapi>=0.115,<1", "uvicorn>=0.32,<1", "pydantic>=2.9,<3", "duckdb>=1.1,<2"]
 
 [tool.setuptools.packages.find]
 include = ["analytics*", "api*", "contracts*", "engine*", "insar*", "pipeline*"]

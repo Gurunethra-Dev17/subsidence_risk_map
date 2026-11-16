@@ -11,3 +11,7 @@ The point loader requires the optional geospatial dependencies: `pip install -e 
 ## Point assignment (A2)
 
 `engine.assign.assign_points_to_buildings(buildings, points, cfg)` projects both GeoDataFrames into the configured UTM zone, queries radar points within `radius_m` of each building centroid, and returns the C1 assignment columns. Buildings with fewer than `min_points` observations are marked sparse with null estimates. Processing is chunked by 50,000 buildings by default; callers can override `chunk_size` for their memory budget.
+
+## Building distortion (A3)
+
+`engine.distortion.compute_building_distortion(buildings, points, cfg)` projects building footprints and VLM points into the configured UTM zone. It considers distinct point pairs 10–60 m apart by default when at least one endpoint lies within a building footprint buffered by `footprint_buffer_m`. Pair distortion is `abs(v_i - v_j) * 1e-3 / distance_m` per year. The building rate is the 90th percentile; fewer than three pairs produce null distortion metrics. The rate is multiplied by `horizon_years` as a scenario, formatted as a `1/N` ratio, and classified using `class_edges_ratio`. The returned frame preserves building order and contains the C1 distortion columns.

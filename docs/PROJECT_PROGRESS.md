@@ -1,7 +1,7 @@
 # Project progress and work log
 
 **Updated:** 2026-11-16
-**Working branch:** `a/c4-openapi-alignment`
+**Working branch:** `a/building-distortion`
 
 This document records what has been implemented in the repository so far, how it maps to the supplied implementation plan, and what remains open. The planning documents describe intended work; entries below describe repository changes and checks actually performed.
 
@@ -9,7 +9,7 @@ This document records what has been implemented in the repository so far, how it
 
 The shared H0 repository scaffold was committed to `main`. Person A has implemented the C6/VLM input loader and building point-assignment module on `a/config-point-loaders`. A CI failure caused by an incorrect Shapely import in the VLM loader was fixed in commit `e298e3f` and pushed. GitHub Actions CI run #8 passed on the updated branch; PR #1 is open: https://github.com/Gurunethra-Dev17/subsidence_risk_map/pull/1. The C4@1.0 OpenAPI description has been aligned on `a/c4-openapi-alignment`; the API implementation remains outstanding.
 
-The core geospatial engine is still in progress. A1/A2 are implemented. Their pure calculation and configuration coverage passes locally; GeoDataFrame integration tests skip locally because the environment blocks a Pandas DLL, but the GitHub Linux CI run passes them. The next Person A implementation task is A3 (angular distortion). Engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
+The core geospatial engine is still in progress. A1/A2 are implemented, and the focused VLM loader integration test passes locally. A3 angular-distortion calculation is implemented on `a/building-distortion`; its unit-test work is A4 and remains outstanding. Engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
 
 ## Work completed
 
@@ -52,6 +52,17 @@ Commit `393566c` — `engine: assign motion points to buildings` — added `engi
 
 New synthetic tests cover source-unit conversion, bbox boundaries, weighted quantiles, radius counts, exact-coordinate weighting, sparse/empty inputs, output ordering, and the public loader/assignment interfaces.
 
+### Person A A3 — building angular distortion
+
+`engine/distortion.py` adds `compute_building_distortion(buildings, points, cfg)` with the C1 output columns.
+
+- Projects building footprints and VLM points into the configured UTM zone.
+- Counts unique point pairs in the configured distance interval when at least one endpoint lies within the buffered building footprint.
+- Computes absolute differential rate per pair, the building-level 90th percentile, and the configured horizon scenario.
+- Returns null distortion metrics for buildings with fewer than three pairs, formats the horizon ratio, and assigns `low`, `watch`, or `inspect` from the configured ratio edges.
+
+The A3 unit and worked-example tests belong to A4 and have not yet been added.
+
 ## Checks performed
 
 - The contract validator passed for the six schema-backed fixtures after the initial setup and again during the packaging fix.
@@ -64,6 +75,7 @@ New synthetic tests cover source-unit conversion, bbox boundaries, weighted quan
 - The subsequent CI run found a separate VLM loader import error: `points_from_xy` was imported from `shapely.geometry`, which does not provide it. Commit `e298e3f` now uses `geopandas.points_from_xy`. The focused local integration test was attempted but skipped because local geo dependencies are unavailable. GitHub Actions CI run #8 on this commit completed successfully.
 - The focused VLM loader integration test was later run locally and passed (**1 passed**) after Smart App Control was turned off for the test environment.
 - The C4 OpenAPI document now includes response/error schemas, the `/buildings` query parameters, ETag and cache policy headers, and the configured-origin CORS policy. Its YAML parses successfully; API implementation and contract tests remain outstanding.
+- A3 implementation is on `a/building-distortion`; A4 tests and a full engine run remain outstanding.
 - A local editable-install dry run reproduced the initial setuptools flat-layout discovery error. After package discovery was configured, a no-build-isolation dry run reached a separate local limitation: this environment lacks the `bdist_wheel` command. The GitHub runner uses normal build isolation with the declared `setuptools` and `wheel` build requirements; its rerun result has not been confirmed here.
 
 The focused VLM loader integration test passes locally. A full engine run against the real Delhi data pack has not been performed because the pack is not present in the workspace.
@@ -83,7 +95,8 @@ The focused VLM loader integration test passes locally. A full engine run agains
 | A0 / shared scaffold | Starter committed | Contract validation passes; full end-to-end mock demo for each package is not implemented yet. |
 | A1 config and point loader | Implemented | Focused VLM CSV integration test passes locally; real Delhi pack integration awaits H1. |
 | A2 point-to-building assignment | Implemented | Pure assignment tests pass; real Delhi pack integration awaits H1. |
-| A3 building distortion | Not started | Next Person A engine task. |
+| A3 building distortion | Implemented | Code is in `engine/distortion.py`; A4 must add worked-example and property tests. |
+| A4 distortion and regression tests | Not started | Next Person A task. |
 | C4 OpenAPI description | Updated | Response/error schemas, building query parameters, cache headers, and configured-origin CORS are documented; API runtime remains outstanding. |
 | H1 real C0 data pack | Not started | B owns the dataset audit and real pack preparation. |
 | H2 C1 output from real data | Not started | Depends on the real pack and the remaining engine work. |

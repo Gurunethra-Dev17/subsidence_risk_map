@@ -1,15 +1,15 @@
 # Project progress and work log
 
-**Updated:** 2026-11-11  
-**Working branch:** `a/config-point-loaders`
+**Updated:** 2026-11-16
+**Working branch:** `a/c4-openapi-alignment`
 
 This document records what has been implemented in the repository so far, how it maps to the supplied implementation plan, and what remains open. The planning documents describe intended work; entries below describe repository changes and checks actually performed.
 
 ## Summary
 
-The shared H0 repository scaffold was committed to `main`. Person A then added the C6/VLM input loader and the building point-assignment module on a feature branch. A packaging configuration problem found while investigating a failed CI run was fixed on that branch. The feature branch has been pushed to GitHub.
+The shared H0 repository scaffold was committed to `main`. Person A has implemented the C6/VLM input loader and building point-assignment module on `a/config-point-loaders`. A CI failure caused by an incorrect Shapely import in the VLM loader was fixed in commit `e298e3f` and pushed. GitHub Actions CI run #8 passed on the updated branch; PR #1 is open: https://github.com/Gurunethra-Dev17/subsidence_risk_map/pull/1. The C4@1.0 OpenAPI description has been aligned on `a/c4-openapi-alignment`; the API implementation remains outstanding.
 
-The core geospatial engine is still in progress. A1/A2 tests have now been added; their pure calculation and configuration coverage passes locally. The GeoDataFrame integration checks are skipped locally because the environment blocks a Pandas DLL. The distortion module (A3), engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
+The core geospatial engine is still in progress. A1/A2 are implemented. Their pure calculation and configuration coverage passes locally; GeoDataFrame integration tests skip locally because the environment blocks a Pandas DLL, but the GitHub Linux CI run passes them. The next Person A implementation task is A3 (angular distortion). Engine integration/export work, real data preparation, and package-level mock demos remain outstanding.
 
 ## Work completed
 
@@ -61,14 +61,18 @@ New synthetic tests cover source-unit conversion, bbox boundaries, weighted quan
 - `python -m pytest -q` completed with **9 passed, 2 skipped**. The skipped tests exercise the full GeoDataFrame point-loader and assignment interfaces; both are skipped only when the local Application Control policy blocks Pandas' `interval` DLL. Other import failures remain test failures.
 - CI now installs the `geo` extra and runs `make test` so those two integration tests execute in the Linux workflow environment.
 - The GitHub Actions run shared for the branch reported **10 passed, 1 failed**. Its failure was in the VLM CSV integration test: normalized values are a NumPy array, but the bbox filter used pandas `.loc` on that array. This was corrected to boolean-array indexing (`values[inside]`); the local suite and contract validator pass after the correction, while the local geospatial integration tests remain skipped by the DLL policy.
+- The subsequent CI run found a separate VLM loader import error: `points_from_xy` was imported from `shapely.geometry`, which does not provide it. Commit `e298e3f` now uses `geopandas.points_from_xy`. The focused local integration test was attempted but skipped because local geo dependencies are unavailable. GitHub Actions CI run #8 on this commit completed successfully.
+- The focused VLM loader integration test was later run locally and passed (**1 passed**) after Smart App Control was turned off for the test environment.
+- The C4 OpenAPI document now includes response/error schemas, the `/buildings` query parameters, ETag and cache policy headers, and the configured-origin CORS policy. Its YAML parses successfully; API implementation and contract tests remain outstanding.
 - A local editable-install dry run reproduced the initial setuptools flat-layout discovery error. After package discovery was configured, a no-build-isolation dry run reached a separate local limitation: this environment lacks the `bdist_wheel` command. The GitHub runner uses normal build isolation with the declared `setuptools` and `wheel` build requirements; its rerun result has not been confirmed here.
 
-No package unit tests or full engine runs have been performed. In particular, the installed GeoPandas/Pandas stack in this environment fails to import because an Application Control policy blocks a DLL, so the spatial execution path was not exercised here.
+The focused VLM loader integration test passes locally. A full engine run against the real Delhi data pack has not been performed because the pack is not present in the workspace.
 
 ## Current repository state
 
 - `main` contains the initial scaffold commit `8565e7a`.
-- The pushed branch `a/config-point-loaders` contains, in order, `8a180ab`, `fde74fe`, and `393566c` on top of `main`.
+- The pushed branch `a/config-point-loaders` contains the A1/A2 implementation and follow-up fixes, including `e298e3f` (`Fix GeoPandas point construction`), on top of `main`.
+- The C4 OpenAPI alignment is prepared separately from the engine PR for review; it documents existing C4@1.0 behavior and does not implement the API runtime.
 - The packaging fix is on the feature branch and will reach `main` when the PR is merged. It does not alter the historical check result attached to `8565e7a`.
 - A local, untracked `.vscode/` folder was present in the workspace and has been left untouched.
 
@@ -77,9 +81,10 @@ No package unit tests or full engine runs have been performed. In particular, th
 | Plan item | Status | Notes |
 |---|---|---|
 | A0 / shared scaffold | Starter committed | Contract validation passes; full end-to-end mock demo for each package is not implemented yet. |
-| A1 config and point loader | Implemented | Config and pure conversion/bbox logic checked; GeoDataFrame integration test is skipped locally due to the blocked DLL. |
-| A2 point-to-building assignment | Implemented | Pure spatial assignment calculations pass; public GeoDataFrame integration test is skipped locally due to the blocked DLL. |
+| A1 config and point loader | Implemented | Focused VLM CSV integration test passes locally; real Delhi pack integration awaits H1. |
+| A2 point-to-building assignment | Implemented | Pure assignment tests pass; real Delhi pack integration awaits H1. |
 | A3 building distortion | Not started | Next Person A engine task. |
+| C4 OpenAPI description | Updated | Response/error schemas, building query parameters, cache headers, and configured-origin CORS are documented; API runtime remains outstanding. |
 | H1 real C0 data pack | Not started | B owns the dataset audit and real pack preparation. |
 | H2 C1 output from real data | Not started | Depends on the real pack and the remaining engine work. |
 

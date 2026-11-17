@@ -16,9 +16,6 @@ from xml.etree import ElementTree
 
 LOG = logging.getLogger("pipeline.vt")
 XLSX_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-VLM_FILENAME = "vlm_points.parquet"
-INCIDENTS_FILENAME = "collapse_incidents.csv"
-VLM_SOURCE = "vt-in-v2"
 
 
 def convert_vlm(input_path: Path, output_path: Path, city: str) -> dict[str, Any]:
@@ -28,20 +25,6 @@ def convert_vlm(input_path: Path, output_path: Path, city: str) -> dict[str, Any
     if not input_path.exists():
         raise FileNotFoundError(input_path)
     table = pd.read_csv(input_path)
-    result = _vlm_table(table, city, pd)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result.to_parquet(output_path, index=False, compression="snappy")
-    return {
-        "rows": len(result),
-        "longitude_range": [float(result.lon.min()), float(result.lon.max())],
-        "latitude_range": [float(result.lat.min()), float(result.lat.max())],
-        "vlm_mm_yr_range": [float(result.vlm_mm_yr.min()), float(result.vlm_mm_yr.max())],
-        "repeated_coordinate_rows_preserved": True,
-        "source": VLM_SOURCE,
-    }
-
-
-def _vlm_table(table: Any, city: str, pd: Any) -> Any:
     required = {"Longitude", "Latitude", "VLM_cm_per_yr"}
     missing = required - set(table.columns)
     if missing:
@@ -51,18 +34,28 @@ def _vlm_table(table: Any, city: str, pd: Any) -> Any:
     vlm = pd.to_numeric(table["VLM_cm_per_yr"], errors="coerce")
     if lon.isna().any() or lat.isna().any() or vlm.isna().any():
         raise ValueError("VLM source contains null or nonnumeric values")
+
     result = pd.DataFrame(
         {
-            "pt_id": [f"{VLM_SOURCE}:{city}:{i:06d}" for i in range(1, len(table) + 1)],
+            "pt_id": [f"vt-in-v2:{city}:{i:06d}" for i in range(1, len(table) + 1)],
             "lon": lon.astype("float64"),
             "lat": lat.astype("float64"),
             "vlm_mm_yr": (vlm * 10).astype("float64"),
-            "source": VLM_SOURCE,
+            "source": "vt-in-v2",
         }
     )
     if not result["pt_id"].is_unique:
         raise ValueError("Generated VLM point IDs are not unique")
-    return result
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result.to_parquet(output_path, index=False, compression="snappy")
+    return {
+        "rows": len(result),
+        "longitude_range": [float(result.lon.min()), float(result.lon.max())],
+        "latitude_range": [float(result.lat.min()), float(result.lat.max())],
+        "vlm_mm_yr_range": [float(result.vlm_mm_yr.min()), float(result.vlm_mm_yr.max())],
+        "repeated_coordinate_rows_preserved": True,
+        "source": "vt-in-v2",
+    }
 
 
 def _column_number(reference: str) -> int:
@@ -81,45 +74,32 @@ def _read_first_worksheet(input_path: Path) -> list[tuple[int, list[str]]]:
         raise FileNotFoundError(input_path)
     with zipfile.ZipFile(input_path) as archive:
         names = set(archive.namelist())
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in names:
+            shared_root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            shared = [
+                "".join(node.text or "" for node in item.findall(".//m:t", XLSX_NS))
+                for item in shared_root.findall("m:si", XLSX_NS)
+            ]
         sheet_name = "xl/worksheets/sheet1.xml"
         if sheet_name not in names:
             raise ValueError("Incident workbook has no first worksheet XML")
-        shared = _shared_strings(archive, names)
         sheet = ElementTree.fromstring(archive.read(sheet_name))
-        return _worksheet_rows(sheet, shared)
-
-
-def _shared_strings(archive: Any, names: set[str]) -> list[str]:
-    shared_name = "xl/sharedStrings.xml"
-    if shared_name not in names:
-        return []
-    shared_root = ElementTree.fromstring(archive.read(shared_name))
-    return [
-        "".join(node.text or "" for node in item.findall(".//m:t", XLSX_NS))
-        for item in shared_root.findall("m:si", XLSX_NS)
-    ]
-
-
-def _cell_text(cell: Any, shared: list[str]) -> str:
-    value = cell.find("m:v", XLSX_NS)
-    text = value.text if value is not None and value.text is not None else ""
-    if cell.attrib.get("t") == "s" and text:
-        return shared[int(text)]
-    if cell.attrib.get("t") == "inlineStr":
-        return "".join(node.text or "" for node in cell.findall(".//m:t", XLSX_NS))
-    return text
-
-
-def _worksheet_rows(sheet: Any, shared: list[str]) -> list[tuple[int, list[str]]]:
-    rows = []
-    for row in sheet.findall(".//m:sheetData/m:row", XLSX_NS):
-        values = {
-            _column_number(cell.attrib.get("r", "")): _cell_text(cell, shared)
-            for cell in row.findall("m:c", XLSX_NS)
-        }
-        width = max(values, default=-1) + 1
-        rows.append((int(row.attrib.get("r", "0")), [values.get(i, "") for i in range(width)]))
-    return rows
+        rows: list[tuple[int, list[str]]] = []
+        for row in sheet.findall(".//m:sheetData/m:row", XLSX_NS):
+            row_values: dict[int, str] = {}
+            for cell in row.findall("m:c", XLSX_NS):
+                index = _column_number(cell.attrib.get("r", ""))
+                value = cell.find("m:v", XLSX_NS)
+                text = value.text if value is not None and value.text is not None else ""
+                if cell.attrib.get("t") == "s" and text:
+                    text = shared[int(text)]
+                elif cell.attrib.get("t") == "inlineStr":
+                    text = "".join(node.text or "" for node in cell.findall(".//m:t", XLSX_NS))
+                row_values[index] = text
+            width = max(row_values, default=-1) + 1
+            rows.append((int(row.attrib.get("r", "0")), [row_values.get(i, "") for i in range(width)]))
+        return rows
 
 
 def _clean(value: Any) -> str:
@@ -142,7 +122,12 @@ def convert_incidents(input_path: Path, output_path: Path, city: str) -> dict[st
     rows = _read_first_worksheet(input_path)
     if len(rows) < 2:
         raise ValueError("Incident workbook has no populated data rows")
-    indices = _incident_columns(rows[0][1])
+    headers = rows[0][1]
+    indices = {header: index for index, header in enumerate(headers)}
+    required = ["Date (YYYYMMMDD)", "Address", "Structure that collapsed", "City", "Injury", "Death"]
+    missing = [name for name in required if name not in indices]
+    if missing:
+        raise ValueError(f"Incident workbook is missing columns: {', '.join(missing)}")
 
     output_rows = []
     source_count = 0
@@ -153,7 +138,26 @@ def convert_incidents(input_path: Path, output_path: Path, city: str) -> dict[st
         get = lambda name: _clean(values[indices[name]]) if indices[name] < len(values) else ""
         if get("City").casefold() != city.casefold():
             continue
-        output_rows.append(_incident_record(excel_row, city, indices, get))
+        note_fields = [
+            ("Address", get("Address")),
+            ("Structure", get("Structure that collapsed")),
+            ("Injuries", get("Injury")),
+            ("Deaths", get("Death")),
+        ]
+        for field in ("Research paper", "Cited sources"):
+            if field in indices:
+                note_fields.append((field, get(field)))
+        note = "; ".join(f"{label}: {value}" for label, value in note_fields if value)
+        output_rows.append(
+            {
+                "incident_id": f"vt-in-v2:incident:{excel_row:03d}",
+                "lon": "",
+                "lat": "",
+                "city": city.title(),
+                "date": _date_iso(get("Date (YYYYMMMDD)")),
+                "note": note,
+            }
+        )
 
     if not output_rows:
         raise ValueError(f"No incidents with source City={city!r} were found")
@@ -170,34 +174,6 @@ def convert_incidents(input_path: Path, output_path: Path, city: str) -> dict[st
         "null_coordinates": len(output_rows),
         "dates_null": sum(row["date"] is None for row in output_rows),
         "city": city.title(),
-    }
-
-
-def _incident_columns(headers: list[str]) -> dict[str, int]:
-    indices = {header: index for index, header in enumerate(headers)}
-    required = ["Date (YYYYMMMDD)", "Address", "Structure that collapsed", "City", "Injury", "Death"]
-    missing = [name for name in required if name not in indices]
-    if missing:
-        raise ValueError(f"Incident workbook is missing columns: {', '.join(missing)}")
-    return indices
-
-
-def _incident_record(excel_row: int, city: str, indices: dict[str, int], get: Any) -> dict[str, Any]:
-    note_fields = [
-        ("Address", get("Address")),
-        ("Structure", get("Structure that collapsed")),
-        ("Injuries", get("Injury")),
-        ("Deaths", get("Death")),
-    ]
-    note_fields.extend((field, get(field)) for field in ("Research paper", "Cited sources") if field in indices)
-    note = "; ".join(f"{label}: {value}" for label, value in note_fields if value)
-    return {
-        "incident_id": f"{VLM_SOURCE}:incident:{excel_row:03d}",
-        "lon": "",
-        "lat": "",
-        "city": city.title(),
-        "date": _date_iso(get("Date (YYYYMMMDD)")),
-        "note": note,
     }
 
 

@@ -8,9 +8,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pipeline.paths import pack_destination
-
-
 LOG = logging.getLogger("pipeline.wards")
 GEOGRAPHIC_CRS = "EPSG:4326"
 WARDS_FILENAME = "wards.geojson"
@@ -158,7 +155,14 @@ def process_from_config(
     pack_dir = Path(config["paths"]["pack_dir"])
     if not pack_dir.is_absolute():
         pack_dir = config_path.resolve().parents[1] / pack_dir
-    destination = pack_destination(pack_dir, output_path, WARDS_FILENAME)
+    pack_dir = pack_dir.resolve()
+    requested_path = output_path if output_path is not None else Path(WARDS_FILENAME)
+    destination = requested_path if requested_path.is_absolute() else pack_dir / requested_path
+    destination = destination.resolve()
+    try:
+        destination.relative_to(pack_dir)
+    except ValueError as exc:
+        raise ValueError(f"Ward output must stay inside the configured pack directory: {pack_dir}") from exc
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     wards, stats = normalize_wards(

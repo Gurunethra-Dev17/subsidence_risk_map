@@ -18,6 +18,7 @@ from typing import Any
 
 LOG = logging.getLogger("pipeline.overture")
 RELEASE_PATTERN = re.compile(r"\b(20\d{2}-\d{2}-\d{2}\.\d+)\b")
+OUTPUT_DIRECTORY_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 def utc_now() -> str:
@@ -143,11 +144,16 @@ def extract_buildings(
     if config.get("contract") != "C6@1.0":
         raise ValueError(f"Expected a C6@1.0 city config: {config_path}")
     raw_root = (config_path.resolve().parents[1] / "data" / "raw").resolve()
-    output_dir = output_dir.resolve()
+    candidate_dir = output_dir.resolve()
     try:
-        output_dir.relative_to(raw_root)
+        relative_output = candidate_dir.relative_to(raw_root)
     except ValueError as exc:
         raise ValueError(f"Overture extracts must be written under {raw_root}") from exc
+    if not relative_output.parts or any(
+        not OUTPUT_DIRECTORY_SEGMENT.fullmatch(part) for part in relative_output.parts
+    ):
+        raise ValueError("Overture output directory must use safe path components under data/raw")
+    output_dir = raw_root.joinpath(*relative_output.parts)
     output_dir.mkdir(parents=True, exist_ok=True)
     tiles = split_bbox(config["bbox"], tile_degrees)
     output_files = [output_dir / f"building_r{row:02d}_c{column:02d}.parquet" for row, column, _ in tiles]

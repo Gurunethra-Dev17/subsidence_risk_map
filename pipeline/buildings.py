@@ -270,17 +270,27 @@ def process_from_config(
         config = yaml.safe_load(stream)
     if config.get("contract") != "C6@1.0":
         raise ValueError(f"Expected a C6@1.0 city config: {config_path}")
-    pack_dir = Path(config["paths"]["pack_dir"])
-    if not pack_dir.is_absolute():
-        pack_dir = config_path.resolve().parents[1] / pack_dir
-    pack_dir = pack_dir.resolve()
-    requested_path = output_path if output_path is not None else Path("buildings.parquet")
-    destination = requested_path if requested_path.is_absolute() else pack_dir / requested_path
-    destination = destination.resolve()
-    try:
-        destination.relative_to(pack_dir)
-    except ValueError as exc:
-        raise ValueError(f"Building output must stay inside the configured pack directory: {pack_dir}") from exc
+    project_root = Path(__file__).resolve().parents[1]
+    configured_pack = Path(config["paths"]["pack_dir"])
+    pack_dir = (
+        configured_pack.resolve()
+        if configured_pack.is_absolute()
+        else (project_root / configured_pack).resolve()
+    )
+    if not configured_pack.is_absolute():
+        try:
+            pack_dir.relative_to(project_root)
+        except ValueError as exc:
+            raise ValueError("Relative pack_dir must stay inside the project directory") from exc
+    destination = (pack_dir / "buildings.parquet").resolve()
+    if output_path is not None:
+        requested_destination = (
+            output_path.resolve()
+            if output_path.is_absolute()
+            else (pack_dir / output_path).resolve()
+        )
+        if requested_destination != destination:
+            raise ValueError(f"C0 building output must be {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     buildings, stats = prepare_buildings(

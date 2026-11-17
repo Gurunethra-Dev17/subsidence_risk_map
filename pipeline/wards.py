@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from pipeline.paths import load_c6_config, resolve_pack_dir
+
 LOG = logging.getLogger("pipeline.wards")
 GEOGRAPHIC_CRS = "EPSG:4326"
 WARDS_FILENAME = "wards.geojson"
@@ -146,32 +148,9 @@ def process_from_config(
     output_path: Path | None = None,
     expected_count: int | None = None,
 ) -> tuple[Path, dict[str, int]]:
-    import yaml
-
-    project_root = Path(__file__).resolve().parents[1]
-    config_root = (project_root / "configs").resolve()
-    config_path = config_path.resolve()
-    try:
-        config_relative_path = config_path.relative_to(config_root)
-    except ValueError as exc:
-        raise ValueError(f"C6 config must be inside {config_root}") from exc
-    if len(config_relative_path.parts) != 1 or config_path.suffix.lower() not in {".yaml", ".yml"}:
-        raise ValueError("C6 config must be a YAML file directly inside configs/")
-    with config_path.open("r", encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if config.get("contract") != "C6@1.0":
-        raise ValueError(f"Expected a C6@1.0 city config: {config_path}")
-    configured_pack = Path(config["paths"]["pack_dir"])
-    pack_dir = (
-        configured_pack.resolve()
-        if configured_pack.is_absolute()
-        else (project_root / configured_pack).resolve()
-    )
-    if not configured_pack.is_absolute():
-        try:
-            pack_dir.relative_to(project_root)
-        except ValueError as exc:
-            raise ValueError("Relative pack_dir must stay inside the project directory") from exc
+) -> tuple[Path, dict[str, int]]:
+    project_root, config = load_c6_config(config_path)
+    pack_dir = resolve_pack_dir(project_root, config["paths"]["pack_dir"])
     destination = (pack_dir / WARDS_FILENAME).resolve()
     if output_path is not None:
         requested_destination = (

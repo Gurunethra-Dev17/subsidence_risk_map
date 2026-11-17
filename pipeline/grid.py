@@ -199,11 +199,19 @@ def process_from_config(
 ) -> tuple[Path, dict[str, int]]:
     import yaml
 
+    project_root = Path(__file__).resolve().parents[1]
+    config_root = (project_root / "configs").resolve()
+    config_path = config_path.resolve()
+    try:
+        config_relative_path = config_path.relative_to(config_root)
+    except ValueError as exc:
+        raise ValueError(f"C6 config must be inside {config_root}") from exc
+    if len(config_relative_path.parts) != 1 or config_path.suffix.lower() not in {".yaml", ".yml"}:
+        raise ValueError("C6 config must be a YAML file directly inside configs/")
     with config_path.open("r", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     if config.get("contract") != "C6@1.0":
         raise ValueError(f"Expected a C6@1.0 city config: {config_path}")
-    project_root = Path(__file__).resolve().parents[1]
     configured_pack = Path(config["paths"]["pack_dir"])
     pack_dir = (
         configured_pack.resolve()

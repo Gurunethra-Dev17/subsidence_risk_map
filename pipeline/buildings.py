@@ -9,11 +9,9 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pipeline.paths import pack_destination
-
-
 LOG = logging.getLogger("pipeline.buildings")
 ALLOWED_SOURCES = {"osm", "google", "microsoft", "esri", "vt"}
+GEOGRAPHIC_CRS = "EPSG:4326"
 
 
 def _geo_modules() -> tuple[Any, Any, Any, Any]:
@@ -80,6 +78,15 @@ def _stable_id(source: str, source_id: Any, geometry: Any, shapely: Any) -> str:
 
 def _overture_source_code(provenance: Any) -> str:
     """Map Overture provenance records to the frozen C0 source enum."""
+    provenance = _normalize_provenance(provenance)
+    for item in provenance:
+        source_code = _source_code_from_label(_provenance_label(item))
+        if source_code is not None:
+            return source_code
+    raise ValueError(f"Could not map Overture provenance into the C0 source enum: {provenance!r}")
+
+
+def _normalize_provenance(provenance: Any) -> list[Any] | tuple[Any, ...]:
     if isinstance(provenance, str):
         try:
             provenance = json.loads(provenance)
@@ -91,24 +98,26 @@ def _overture_source_code(provenance: Any) -> str:
         provenance = [provenance]
     if not isinstance(provenance, (list, tuple)):
         raise ValueError("Overture source=auto needs a list/dict sources field for every feature")
+    return provenance
 
-    for item in provenance:
-        if isinstance(item, dict):
-            label = " ".join(
-                str(item.get(field, ""))
-                for field in ("provider", "dataset", "resource", "dataset_name")
-            ).lower()
-        else:
-            label = str(item).lower()
-        if "openstreetmap" in label or "osm" in label:
-            return "osm"
-        if "google" in label:
-            return "google"
-        if "microsoft" in label:
-            return "microsoft"
-        if "esri" in label:
-            return "esri"
-    raise ValueError(f"Could not map Overture provenance into the C0 source enum: {provenance!r}")
+
+def _provenance_label(item: Any) -> str:
+    if not isinstance(item, dict):
+        return str(item).lower()
+    fields = ("provider", "dataset", "resource", "dataset_name")
+    return " ".join(str(item.get(field, "")) for field in fields).lower()
+
+
+def _source_code_from_label(label: str) -> str | None:
+    if "openstreetmap" in label or "osm" in label:
+        return "osm"
+    if "google" in label:
+        return "google"
+    if "microsoft" in label:
+        return "microsoft"
+    if "esri" in label:
+        return "esri"
+    return None
 
 
 def _assign_ids(
@@ -124,7 +133,7 @@ def _assign_ids(
     centroids = gpd.GeoDataFrame(
         {"_row": range(len(buildings))},
         geometry=centroid_geometries,
-        crs="EPSG:4326",
+        crs=GEOGRAPHIC_CRS,
     )
     targets = polygons[[id_column, polygons.geometry.name]].copy()
     joined = gpd.sjoin(centroids, targets, how="left", predicate="within")
@@ -156,7 +165,7 @@ def _normalize_input_chunk(
     else:
         frame["_c0_source"] = source
     input_rows = len(frame)
-    frame = frame.to_crs("EPSG:4326")
+    frame = frame.to_crs(GEOGRAPHIC_CRS)
     frame = frame.loc[frame.geometry.notna() & ~frame.geometry.is_empty].copy()
     frame[frame.geometry.name] = frame.geometry.map(lambda geom: _polygonal(geom, classes))
     frame = frame.loc[frame.geometry.notna() & ~frame.geometry.is_empty].copy()
@@ -168,13 +177,15 @@ def _normalize_input_chunk(
     ]
     chunk = frame[["bldg_id", "source"]].copy()
     chunk["geometry"] = frame.geometry
-    return gpd.GeoDataFrame(chunk, geometry="geometry", crs="EPSG:4326"), input_rows
+    return gpd.GeoDataFrame(chunk, geometry="geometry", crs=GEOGRAPHIC_CRS), input_rows
 
 
 def _deduplicate_measure(
     gpd: Any, pd: Any, chunks: list[Any], utm_epsg: int, min_area_m2: float, shapely: Any
 ) -> Any:
-    buildings = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True), geometry="geometry", crs="EPSG:4326")
+    buildings = gpd.GeoDataFrame(
+        pd.concat(chunks, ignore_index=True), geometry="geometry", crs=GEOGRAPHIC_CRS
+    )
     buildings = buildings.drop_duplicates("bldg_id", keep="first")
     buildings["_geometry_key"] = buildings.geometry.map(
         lambda geom: shapely.to_wkb(shapely.normalize(geom), hex=True)
@@ -224,16 +235,16 @@ def prepare_buildings(
         before_count += input_rows
     buildings = _deduplicate_measure(gpd, pd, chunks, utm_epsg, min_area_m2, shapely)
 
-    wards = _read_layer(gpd, wards_path).to_crs("EPSG:4326")
-    grid = _read_layer(gpd, grid_path).to_crs("EPSG:4326")
+    wards = _read_layer(gpd, wards_path).to_crs(GEOGRAPHIC_CRS)
+    grid = _read_layer(gpd, grid_path).to_crs(GEOGRAPHIC_CRS)
     _validate_boundaries(wards, grid)
     buildings = buildings.reset_index(drop=True)
-    centroid_geometries = buildings.to_crs(epsg=utm_epsg).geometry.centroid.to_crs("EPSG:4326")
+    centroid_geometries = buildings.to_crs(epsg=utm_epsg).geometry.centroid.to_crs(GEOGRAPHIC_CRS)
     buildings = _assign_ids(gpd, buildings, wards, "ward_id", "ward_id", centroid_geometries)
     buildings = _assign_ids(gpd, buildings, grid, "cell_id", "cell_id", centroid_geometries)
 
     buildings = buildings[["bldg_id", "footprint_m2", "source", "ward_id", "cell_id", buildings.geometry.name]]
-    buildings = buildings.set_crs("EPSG:4326", allow_override=True)
+    buildings = buildings.set_crs(GEOGRAPHIC_CRS, allow_override=True)
     stats = {
         "input_rows": before_count,
         "output_rows": len(buildings),
@@ -262,7 +273,14 @@ def process_from_config(
     pack_dir = Path(config["paths"]["pack_dir"])
     if not pack_dir.is_absolute():
         pack_dir = config_path.resolve().parents[1] / pack_dir
-    destination = pack_destination(pack_dir, output_path, "buildings.parquet")
+    pack_dir = pack_dir.resolve()
+    requested_path = output_path if output_path is not None else Path("buildings.parquet")
+    destination = requested_path if requested_path.is_absolute() else pack_dir / requested_path
+    destination = destination.resolve()
+    try:
+        destination.relative_to(pack_dir)
+    except ValueError as exc:
+        raise ValueError(f"Building output must stay inside the configured pack directory: {pack_dir}") from exc
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     buildings, stats = prepare_buildings(

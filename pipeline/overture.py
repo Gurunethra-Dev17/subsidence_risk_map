@@ -51,14 +51,80 @@ def _render_bbox(bbox: tuple[float, float, float, float]) -> str:
     return ",".join(f"{coordinate:.8f}" for coordinate in bbox)
 
 
-def _raw_output_directory(config_path: Path, output_dir: Path) -> Path:
-    raw_root = config_path.resolve().parents[1] / "data" / "raw"
-    destination = output_dir.resolve()
+def _overture_cli() -> tuple[str, str]:
     try:
-        destination.relative_to(raw_root.resolve())
-    except ValueError as exc:
-        raise ValueError(f"Overture extracts must be written under {raw_root}") from exc
-    return destination
+        cli_version = importlib.metadata.version("overturemaps")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError("Install the official Overture client with `pip install overturemaps` first") from exc
+    cli_path = shutil.which("overturemaps")
+    if cli_path is None:
+        executable = "overturemaps.exe" if sys.platform == "win32" else "overturemaps"
+        candidate = Path(sys.executable).parent / executable
+        if not candidate.is_file():
+            raise RuntimeError(f"Could not locate the installed Overture CLI next to {sys.executable}")
+        cli_path = str(candidate)
+    return cli_path, cli_version
+
+
+def _download_tile(
+    tile: tuple[int, int, tuple[float, float, float, float]],
+    output_path: Path,
+    cli_path: str,
+    runner: Any,
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    row, column, bbox = tile
+    command = [
+        cli_path,
+        "download",
+        f"--bbox={_render_bbox(bbox)}",
+        "-f",
+        "geoparquet",
+        "--type=building",
+        "-o",
+        str(output_path),
+    ]
+    result = runner(command, check=False, capture_output=True, text=True)
+    stdout, stderr = result.stdout or "", result.stderr or ""
+    log = {"tile_row": row, "tile_column": column, "command": command, "stdout": stdout, "stderr": stderr}
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Overture download failed for tile row={row}, column={column}; see command output above."
+        )
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        raise RuntimeError(f"Overture command succeeded but produced no data file: {output_path}")
+    release = _tile_release(output_path)
+    return (
+        {"name": output_path.name, "bbox": list(bbox), "bytes": output_path.stat().st_size, "release": release},
+        log,
+        release,
+    )
+
+
+def _tile_release(output_path: Path) -> str | None:
+    state_path = Path(str(output_path) + ".state")
+    if not state_path.is_file():
+        return None
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8")).get("last_release")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _download_tiles(
+    tiles: list[tuple[int, int, tuple[float, float, float, float]]],
+    output_files: list[Path],
+    cli_path: str,
+    runner: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
+    outputs, logs, releases = [], [], set()
+    for tile, output_path in zip(tiles, output_files, strict=True):
+        item, log, release = _download_tile(tile, output_path, cli_path, runner)
+        outputs.append(item)
+        logs.append(log)
+        releases.update(RELEASE_PATTERN.findall(log["stdout"] + "\n" + log["stderr"]))
+        if release:
+            releases.add(str(release))
+    return outputs, logs, releases
 
 
 def extract_buildings(
@@ -76,7 +142,12 @@ def extract_buildings(
         config = yaml.safe_load(stream)
     if config.get("contract") != "C6@1.0":
         raise ValueError(f"Expected a C6@1.0 city config: {config_path}")
-    output_dir = _raw_output_directory(config_path, output_dir)
+    raw_root = (config_path.resolve().parents[1] / "data" / "raw").resolve()
+    output_dir = output_dir.resolve()
+    try:
+        output_dir.relative_to(raw_root)
+    except ValueError as exc:
+        raise ValueError(f"Overture extracts must be written under {raw_root}") from exc
     output_dir.mkdir(parents=True, exist_ok=True)
     tiles = split_bbox(config["bbox"], tile_degrees)
     output_files = [output_dir / f"building_r{row:02d}_c{column:02d}.parquet" for row, column, _ in tiles]
@@ -88,61 +159,9 @@ def extract_buildings(
             + ", ".join(path.name for path in existing)
         )
 
-    try:
-        cli_version = importlib.metadata.version("overturemaps")
-    except importlib.metadata.PackageNotFoundError as exc:
-        raise RuntimeError("Install the official Overture client with `pip install overturemaps` first") from exc
-    cli_path = shutil.which("overturemaps")
-    if cli_path is None:
-        executable = "overturemaps.exe" if sys.platform == "win32" else "overturemaps"
-        candidate = Path(sys.executable).parent / executable
-        if not candidate.is_file():
-            raise RuntimeError(f"Could not locate the installed Overture CLI next to {sys.executable}")
-        cli_path = str(candidate)
-
+    cli_path, cli_version = _overture_cli()
     started = utc_now()
-    outputs = []
-    logs = []
-    releases = set()
-    for (row, column, bbox), output_path in zip(tiles, output_files, strict=True):
-        command = [
-            cli_path,
-            "download",
-            f"--bbox={_render_bbox(bbox)}",
-            "-f",
-            "geoparquet",
-            "--type=building",
-            "-o",
-            str(output_path),
-        ]
-        result = runner(command, check=False, capture_output=True, text=True)
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        logs.append({"tile_row": row, "tile_column": column, "command": command, "stdout": stdout, "stderr": stderr})
-        releases.update(RELEASE_PATTERN.findall(stdout + "\n" + stderr))
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Overture download failed for tile row={row}, column={column}; see command output above."
-            )
-        if not output_path.is_file() or output_path.stat().st_size == 0:
-            raise RuntimeError(f"Overture command succeeded but produced no data file: {output_path}")
-        tile_release = None
-        state_path = Path(str(output_path) + ".state")
-        if state_path.is_file():
-            try:
-                tile_release = json.loads(state_path.read_text(encoding="utf-8")).get("last_release")
-            except (OSError, json.JSONDecodeError):
-                tile_release = None
-        if tile_release:
-            releases.add(str(tile_release))
-        outputs.append(
-            {
-                "name": output_path.name,
-                "bbox": list(bbox),
-                "bytes": output_path.stat().st_size,
-                "release": tile_release,
-            }
-        )
+    outputs, logs, releases = _download_tiles(tiles, output_files, cli_path, runner)
 
     record = {
         "city": config["city"],

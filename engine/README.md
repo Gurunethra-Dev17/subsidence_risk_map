@@ -23,3 +23,7 @@ The point loader requires the optional geospatial dependencies: `pip install -e 
 ## Parameter robustness (A7)
 
 `engine.robustness.run_robustness(buildings, points, cfg, output_dir, engine_version=...)` runs the Cartesian product of `radius_variants_m` and `pair_distance_variants_m` from C6. Assignment work is reused across pair windows and distortion work across radii. Each C1 result is stored under `radius-<m>m/pairs-<min>-<max>m/building_metrics.parquet`; `robustness_summary.json` records the variants, hashes, row counts, and non-null VLM shares. When `pair_distance_variants_m` is omitted, the runner derives three windows from the configured baseline bounds.
+
+## Chunked C0-to-C1 run (A5)
+
+Run `python -m engine.run --config configs/delhi.yaml --pack-dir B --ward-id 125 --chunk-size 5000` to process a ward from a local pack. Omit `--ward-id` for all buildings; use `--limit-buildings` for bounded smoke runs. The runner streams C0 GeoParquet batches, logs per-chunk progress, writes a single C1 Parquet file plus a run summary under the configured output folder, and records non-null VLM coverage. `--pack-dir` overrides the configured path for local/internal packs without changing the shared C6 file.

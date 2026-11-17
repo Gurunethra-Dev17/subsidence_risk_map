@@ -9,7 +9,7 @@ This document records what has been implemented in the repository so far, how it
 
 The shared H0 repository scaffold was committed to `main`. Person A has implemented the C6/VLM input loader and building point-assignment module on `a/config-point-loaders`. A CI failure caused by an incorrect Shapely import in the VLM loader was fixed in commit `e298e3f` and pushed. GitHub Actions CI run #8 passed on the updated branch; PR #1 is open: https://github.com/Gurunethra-Dev17/subsidence_risk_map/pull/1. The C4@1.0 OpenAPI description has been aligned on `a/c4-openapi-alignment`; the API implementation remains outstanding.
 
-The core geospatial engine is still in progress. A1/A2 are implemented, and the focused VLM loader integration test passes locally. A3 angular-distortion calculation, A4 regression tests, and the independent A6 C1 Parquet exporter are implemented on `a/building-distortion`. A5 benchmarking/CLI work depends on B's real C0 pack. A7 robustness runner is implemented independently; real-data runs remain pending a valid building file.
+The core geospatial engine is still in progress. A1/A2 are implemented, and the focused VLM loader integration test passes locally. A3 angular-distortion calculation, A4 regression tests, and A5-A7 engine work are implemented on `a/building-distortion`. The B-supplied C0 candidate passes local preflight. The chunked engine CLI, C1 exporter, and robustness runner have been exercised on a ward-scoped internal pilot; the full-city run remains unbenchmarked and the data/output remain local.
 
 ## Work completed
 
@@ -63,6 +63,10 @@ New synthetic tests cover source-unit conversion, bbox boundaries, weighted quan
 
 A4 adds worked-example, public-interface regression, boundary, and permutation/sign-invariance checks for this calculation.
 
+### Person A A5 - chunked processing and command line
+
+`engine/run.py` provides `python -m engine.run`. It streams C0 GeoParquet record batches, optionally filters to a ward and/or building limit, computes assignment and distortion metrics per bounded batch, writes temporary C1 fragments, and combines them atomically into one C1 Parquet file. It records per-chunk progress in a local log and writes a run summary with the pack version, parameter hash, row count, and VLM coverage. The Delhi pilot was run on Ward 125; a full-city benchmark is still outstanding.
+
 ### Person A A6 - C1 Parquet export
 
 `engine/export.py` joins C0 building attributes with A2 assignment and A3 distortion results by `bldg_id`, validates unique and complete building coverage, and writes the C1 Parquet fields and metadata. The parameter hash is SHA-256 over canonical JSON for the C6 `params` mapping; writes use a temporary file followed by atomic replacement. The exporter reports the non-null share of `vlm_mm_yr` for the H2 handoff.
@@ -83,12 +87,12 @@ A4 adds worked-example, public-interface regression, boundary, and permutation/s
 - The subsequent CI run found a separate VLM loader import error: `points_from_xy` was imported from `shapely.geometry`, which does not provide it. Commit `e298e3f` now uses `geopandas.points_from_xy`. The focused local integration test was attempted but skipped because local geo dependencies are unavailable. GitHub Actions CI run #8 on this commit completed successfully.
 - The focused VLM loader integration test was later run locally and passed (**1 passed**) after Smart App Control was turned off for the test environment.
 - The C4 OpenAPI document now includes response/error schemas, the `/buildings` query parameters, ETag and cache policy headers, and the configured-origin CORS policy. Its YAML parses successfully; API implementation and contract tests remain outstanding.
-- A3, A4, A6, and A7 are implemented on `a/building-distortion`. A6/A7 have passed syntax compilation and lint checks but have not yet been exercised end-to-end. A5 and real-data runs await B's valid C0 building file.
-- The synthetic C1 Parquet fixture is readable through DuckDB and its `bldg_id` values match the three synthetic C0 JSON records. Per the C0/C1 contract, `bldg_id` is the join key. The actual C0 GeoParquet geometry fixture is still absent, so spatial integration awaits Person B's fixture/confirmation.
+- A3-A7 are implemented on `a/building-distortion`; A5-A7 have been exercised on a bounded real-data pilot. The full-city engine run is pending further performance profiling.
+- The B-supplied C0 candidate now includes valid GeoParquet building geometry. The C0/C1 join key is `bldg_id`; the VT risk file has no joinable `bldg_id` values, so `vt_risk_insar` remains null in current exports. The pack and derived outputs are restricted to internal prototype use while the ward-source licence is unresolved.
 - DuckDB is included in the `api` optional dependency extra for reproducible API installs.
 - A local editable-install dry run reproduced the initial setuptools flat-layout discovery error. After package discovery was configured, a no-build-isolation dry run reached a separate local limitation: this environment lacks the `bdist_wheel` command. The GitHub runner uses normal build isolation with the declared `setuptools` and `wheel` build requirements; its rerun result has not been confirmed here.
 
-The focused VLM loader integration test passes locally. A full engine run against the real Delhi data pack has not been performed because the pack is not present in the workspace.
+The focused VLM loader integration test passes locally. A ward-scoped engine run against the B-supplied Delhi candidate completed locally; the full-city run has not been performed.
 
 ## Current repository state
 
@@ -103,15 +107,15 @@ The focused VLM loader integration test passes locally. A full engine run agains
 | Plan item | Status | Notes |
 |---|---|---|
 | A0 / shared scaffold | Starter committed | Contract validation passes; full end-to-end mock demo for each package is not implemented yet. |
-| A1 config and point loader | Implemented | Focused VLM CSV integration test passes locally; real Delhi pack integration awaits H1. |
-| A2 point-to-building assignment | Implemented | Pure assignment tests pass; real Delhi pack integration awaits H1. |
+| A1 config and point loader | Implemented | Focused VLM CSV test passes; real Delhi VLM Parquet loaded successfully and was bbox-clipped during the pilot. |
+| A2 point-to-building assignment | Implemented | Pure assignment tests pass; real Delhi pilot assignments completed. |
 | A3 building distortion | Implemented | Code is in `engine/distortion.py`; emits the C1 building-level distortion fields. |
 | A4 distortion and regression tests | Implemented | `engine/tests/test_distortion.py` covers examples, public interface, thresholds, edge cases, and invariants; full local suite passed before A6 work. |
-| A5 performance, memory, GeoParquet I/O, CLI, logging | Waiting on B | Requires the real C0 building pack (H1); A6 is being prepared independently. |
-| A6 C1 Parquet export | Implemented, unverified | `engine/export.py` joins metrics by `bldg_id`, writes contract metadata and reports VLM coverage; requires a code/test run before handoff. |
-| A7 parameter robustness runner | Implemented, unverified | `engine/robustness.py` evaluates radius/pair-window combinations, writes C1 files and a stable summary; a real-data run awaits a valid C0 building file. |
+| A5 performance, memory, GeoParquet I/O, CLI, logging | Implemented; pilot run completed | `engine/run.py` streams bounded batches, supports ward-scoped runs, combines C1 fragments into one output, and logs progress. Full-city benchmark remains. |
+| A6 C1 Parquet export | Implemented; pilot integration completed | Verified through the chunked real-data pilot; emits required C1 metadata and reports VLM coverage. |
+| A7 parameter robustness runner | Implemented; pilot integration completed | Ran all nine configured radius/pair-window combinations on a bounded real-data sample; outputs remain local. |
 | C4 OpenAPI description | Updated | Response/error schemas, building query parameters, cache headers, and configured-origin CORS are documented; API runtime remains outstanding. |
-| H1 real C0 data pack | Not started | B owns the dataset audit and real pack preparation. |
-| H2 C1 output from real data | Not started | Depends on the real pack and the remaining engine work. |
+| H1 real C0 data pack | Local preflight passed | B candidate pack passed manifest, hashes, row counts, CRS, ID, and geometry checks; keep pack private pending ward-source licence resolution. |
+| H2 C1 output from real data | Pilot output completed | C1 schema/metadata exported for the ward pilot; full-city output and coverage report remain. |
 
 The supplied plan expects owners to work in parallel against mocks after H0. H0 is only partially satisfied: the shared structure, contracts, fixtures, and validation command exist, but each package still needs a real mock-driven demo before the gate's acceptance criteria are complete.

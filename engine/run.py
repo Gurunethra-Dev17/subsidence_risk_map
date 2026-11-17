@@ -21,7 +21,7 @@ from engine.io import load_config, load_vlm_points
 
 LOGGER = logging.getLogger("engine.run")
 BUILDING_COLUMNS = ["bldg_id", "footprint_m2", "source", "ward_id", "cell_id", "geometry"]
-_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "out" / "delhi"
+_OUTPUT_DIR = Path("out") / "delhi"
 _C1_OUTPUT_PATH = _OUTPUT_DIR / "building_metrics.parquet"
 _SUMMARY_PATH = _OUTPUT_DIR / "building_metrics.run_summary.json"
 _LOG_PATH = _OUTPUT_DIR / "building_metrics.engine_run.log"

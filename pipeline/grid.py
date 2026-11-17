@@ -9,9 +9,6 @@ import math
 from pathlib import Path
 from typing import Any
 
-from pipeline.paths import pack_destination
-
-
 LOG = logging.getLogger("pipeline.grid")
 GEOGRAPHIC_CRS = "EPSG:4326"
 GRID_FILENAME = "grid_250m.geojson"
@@ -68,6 +65,28 @@ def _geo_modules() -> tuple[Any, Any, Any]:
     return gpd, pd, shapely
 
 
+def _grid_cell_record(
+    city_shape: Any, city: str, grid_m: int, ix: int, iy: int, shapely: Any
+) -> tuple[dict[str, Any] | None, int, int]:
+    clipped = shapely.box(
+        ix * grid_m, iy * grid_m, (ix + 1) * grid_m, (iy + 1) * grid_m
+    ).intersection(city_shape)
+    if clipped.is_empty or clipped.area <= 0:
+        return None, 0, 0
+    repaired = 0
+    if not clipped.is_valid:
+        clipped = shapely.make_valid(clipped)
+        repaired = 1
+    clipped, discarded = _polygonal_only(clipped, shapely)
+    if clipped is None or clipped.is_empty or clipped.area <= 0:
+        return None, repaired, discarded
+    if not clipped.is_valid:
+        raise ValueError(
+            f"Grid intersection produced invalid geometry for cell {city.upper()}_{grid_m}M_{ix}_{iy}"
+        )
+    return {"cell_id": f"{city.upper()}_{grid_m}M_{ix}_{iy}", "geometry": clipped}, repaired, discarded
+
+
 def _grid_records(city_shape: Any, city: str, grid_m: int, shapely: Any) -> tuple[list[dict[str, Any]], int, int]:
     min_x, min_y, max_x, max_y = city_shape.bounds
     x_range = range(math.floor(min_x / grid_m), math.ceil(max_x / grid_m))
@@ -75,23 +94,11 @@ def _grid_records(city_shape: Any, city: str, grid_m: int, shapely: Any) -> tupl
     records, repaired_cells, discarded_parts = [], 0, 0
     for ix in x_range:
         for iy in y_range:
-            clipped = shapely.box(
-                ix * grid_m, iy * grid_m, (ix + 1) * grid_m, (iy + 1) * grid_m
-            ).intersection(city_shape)
-            if clipped.is_empty or clipped.area <= 0:
-                continue
-            if not clipped.is_valid:
-                clipped = shapely.make_valid(clipped)
-                repaired_cells += 1
-            clipped, discarded = _polygonal_only(clipped, shapely)
+            record, repaired, discarded = _grid_cell_record(city_shape, city, grid_m, ix, iy, shapely)
+            repaired_cells += repaired
             discarded_parts += discarded
-            if clipped is None or clipped.is_empty or clipped.area <= 0:
-                continue
-            if not clipped.is_valid:
-                raise ValueError(
-                    f"Grid intersection produced invalid geometry for cell {city.upper()}_{grid_m}M_{ix}_{iy}"
-                )
-            records.append({"cell_id": f"{city.upper()}_{grid_m}M_{ix}_{iy}", "geometry": clipped})
+            if record is not None:
+                records.append(record)
     return records, repaired_cells, discarded_parts
 
 
@@ -199,7 +206,14 @@ def process_from_config(
     pack_dir = Path(config["paths"]["pack_dir"])
     if not pack_dir.is_absolute():
         pack_dir = config_path.resolve().parents[1] / pack_dir
-    destination = pack_destination(pack_dir, output_path, GRID_FILENAME)
+    pack_dir = pack_dir.resolve()
+    requested_path = output_path if output_path is not None else Path(GRID_FILENAME)
+    destination = requested_path if requested_path.is_absolute() else pack_dir / requested_path
+    destination = destination.resolve()
+    try:
+        destination.relative_to(pack_dir)
+    except ValueError as exc:
+        raise ValueError(f"Grid output must stay inside the configured pack directory: {pack_dir}") from exc
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     grid_m = int(config["params"]["grid_m"])

@@ -132,23 +132,49 @@ def _geo_structure_findings(filename: str, frame: Any, errors: list[str]) -> Non
 
 
 def _geo_content_findings(filename: str, frame: Any, expected_wards: int | None, errors: list[str]) -> None:
-    if filename == WARD_FILE and "ward_id" in frame:
-        _id_errors(f"{WARD_FILE} ward_id", frame["ward_id"], errors)
-        if expected_wards is not None and len(frame) != expected_wards:
-            errors.append(f"{WARD_FILE}: expected {expected_wards} rows, found {len(frame)}")
-    elif filename == BUILDINGS_FILE and "bldg_id" in frame:
-        _id_errors(f"{BUILDINGS_FILE} bldg_id", frame["bldg_id"], errors)
-        allowed = {"osm", "google", "microsoft", "esri", "vt"}
-        if "source" in frame and not frame["source"].isin(allowed).all():
-            errors.append(f"{BUILDINGS_FILE}: source contains values outside the C0 source enum")
-        if "footprint_m2" in frame:
-            invalid_area = (frame["footprint_m2"] <= 0).any() or frame["footprint_m2"].isna().any()
-            if invalid_area:
-                errors.append(f"{BUILDINGS_FILE}: footprint_m2 must be positive and non-null")
-    elif filename == GRID_FILE and "cell_id" in frame:
-        _id_errors(f"{GRID_FILE} cell_id", frame["cell_id"], errors)
+    if filename == WARD_FILE:
+        _ward_content_findings(frame, expected_wards, errors)
+    elif filename == BUILDINGS_FILE:
+        _building_content_findings(frame, errors)
+    elif filename == GRID_FILE:
+        _grid_content_findings(frame, errors)
     elif filename == VT_RISK_FILE:
         _risk_value_findings(frame, errors)
+
+
+def _ward_content_findings(frame: Any, expected_wards: int | None, errors: list[str]) -> None:
+    if "ward_id" not in frame:
+        return
+    _id_errors(f"{WARD_FILE} ward_id", frame["ward_id"], errors)
+    if expected_wards is not None and len(frame) != expected_wards:
+        errors.append(f"{WARD_FILE}: expected {expected_wards} rows, found {len(frame)}")
+
+
+def _building_content_findings(frame: Any, errors: list[str]) -> None:
+    if "bldg_id" not in frame:
+        return
+    _id_errors(f"{BUILDINGS_FILE} bldg_id", frame["bldg_id"], errors)
+    _building_source_findings(frame, errors)
+    _building_area_findings(frame, errors)
+
+
+def _building_source_findings(frame: Any, errors: list[str]) -> None:
+    allowed = {"osm", "google", "microsoft", "esri", "vt"}
+    if "source" in frame and not frame["source"].isin(allowed).all():
+        errors.append(f"{BUILDINGS_FILE}: source contains values outside the C0 source enum")
+
+
+def _building_area_findings(frame: Any, errors: list[str]) -> None:
+    if "footprint_m2" not in frame:
+        return
+    invalid_area = (frame["footprint_m2"] <= 0).any() or frame["footprint_m2"].isna().any()
+    if invalid_area:
+        errors.append(f"{BUILDINGS_FILE}: footprint_m2 must be positive and non-null")
+
+
+def _grid_content_findings(frame: Any, errors: list[str]) -> None:
+    if "cell_id" in frame:
+        _id_errors(f"{GRID_FILE} cell_id", frame["cell_id"], errors)
 
 
 def _risk_value_findings(frame: Any, errors: list[str]) -> None:

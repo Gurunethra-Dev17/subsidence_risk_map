@@ -1,4 +1,4 @@
-﻿"""Chunked C0-to-C1 geospatial engine command line."""
+"""Chunked C0-to-C1 geospatial engine command line."""
 from __future__ import annotations
 
 import argparse
@@ -83,6 +83,109 @@ def _combine_parquet_parts(parts: list[Path], destination: Path) -> None:
         raise
 
 
+def _resolve_output_path(cfg, output_path, ward_id, limit_buildings) -> Path:
+    """Keep all runner artifacts inside the repository's ignored out folder."""
+    repo_root = Path(__file__).resolve().parents[1]
+    output_root = (repo_root / "out").resolve()
+    configured_dir = Path(cfg.out_dir).resolve()
+    try:
+        configured_dir.relative_to(output_root)
+    except ValueError as exc:
+        raise EngineRunError("C6 out_dir must resolve beneath the repository out/ directory") from exc
+
+    if output_path is None:
+        suffix = f"_ward-{ward_id}" if ward_id is not None else ""
+        if limit_buildings is not None:
+            suffix += f"_first-{limit_buildings}"
+        candidate = configured_dir / f"building_metrics{suffix}.parquet"
+    else:
+        supplied = Path(output_path).expanduser()
+        if supplied.is_absolute():
+            candidate = supplied
+        elif supplied.parts and supplied.parts[0].casefold() == "out":
+            candidate = repo_root / supplied
+        else:
+            candidate = configured_dir / supplied
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(output_root)
+    except ValueError as exc:
+        raise EngineRunError("--output must resolve beneath the repository out/ directory") from exc
+    return resolved
+
+
+def _read_pack(cfg):
+    manifest_path = cfg.pack_dir / "PACK_MANIFEST.json"
+    if not manifest_path.is_file():
+        raise EngineRunError(f"C0 manifest does not exist: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EngineRunError(f"cannot read C0 manifest {manifest_path}: {exc}") from exc
+    if manifest.get("contract") != "C0@1.0" or manifest.get("city") != cfg.city:
+        raise EngineRunError("C0 manifest contract/city do not match the selected C6 configuration")
+    buildings_path = cfg.pack_dir / "buildings.parquet"
+    points_path = cfg.pack_dir / "vlm_points.parquet"
+    for required in (buildings_path, points_path):
+        if not required.is_file():
+            raise EngineRunError(f"required C0 input does not exist: {required}")
+    return manifest, manifest.get("pack_version", cfg.pack_dir.name), buildings_path, points_path
+
+
+def _validate_building_file(building_file, manifest) -> None:
+    entry = next(
+        (item for item in manifest.get("files", []) if item.get("name") == "buildings.parquet"),
+        None,
+    )
+    if entry is None or building_file.metadata.num_rows != entry.get("rows"):
+        raise EngineRunError("C0 building row count does not match PACK_MANIFEST.json")
+    missing = sorted(set(BUILDING_COLUMNS) - set(building_file.schema_arrow.names))
+    if missing:
+        raise EngineRunError(f"C0 buildings are missing required columns: {', '.join(missing)}")
+    metadata = json.loads((building_file.schema_arrow.metadata or {}).get(b"geo", b"{}"))
+    if not metadata.get("columns", {}).get("geometry", {}).get("crs"):
+        raise EngineRunError("C0 GeoParquet buildings must declare geometry CRS")
+
+
+def _process_batch(frame, gpd, points, cfg, part_path, chunk_size, version):
+    if frame.empty:
+        return 0, 0
+    geometry = gpd.GeoSeries.from_wkb(frame.pop("geometry"), crs="EPSG:4326")
+    buildings = gpd.GeoDataFrame(
+        frame.reset_index(drop=True), geometry=geometry.reset_index(drop=True), crs="EPSG:4326",
+    )
+    if buildings.geometry.isna().any() or buildings.geometry.is_empty.any():
+        raise EngineRunError("C0 building chunk contains null or empty geometries")
+    if not buildings.geometry.geom_type.isin(["Polygon", "MultiPolygon"]).all():
+        raise EngineRunError("C0 building chunk contains non-polygon geometry")
+    if not buildings.geometry.is_valid.all():
+        raise EngineRunError("C0 building chunk contains invalid geometry")
+    assignments = assign_points_to_buildings(buildings, points, cfg, chunk_size=chunk_size)
+    distortions = compute_building_distortion(buildings, points, cfg)
+    export_info = export_building_metrics(
+        buildings, assignments, distortions, cfg, part_path, engine_version=version,
+    )
+    return export_info["rows"], int(assignments["vlm_mm_yr"].notna().sum())
+
+
+def _write_run_summary(output, pack_version, version, cfg, processed, nonnull_vlm,
+                       chunk_size, ward_id, limit_buildings, started):
+    metadata = pq.ParquetFile(output).schema_arrow.metadata
+    summary = {
+        "contract": "C1@1.0", "city": cfg.city, "pack_version": pack_version,
+        "engine_version": version, "seed": cfg.seed, "params": dict(cfg.params),
+        "params_hash": metadata[b"params_hash"].decode("ascii"),
+        "buildings_processed": processed, "non_null_vlm_buildings": nonnull_vlm,
+        "non_null_vlm_share": nonnull_vlm / processed if processed else 0.0,
+        "chunk_size": chunk_size, "ward_id_filter": ward_id,
+        "limit_buildings": limit_buildings, "output": str(output),
+        "elapsed_seconds": round(time.perf_counter() - started, 3),
+    }
+    summary_path = output.with_name(f"{output.stem}.run_summary.json")
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
 def run_engine(
     config_path: str | Path,
     *,
@@ -109,31 +212,9 @@ def run_engine(
     if pack_dir is not None:
         paths = {**cfg.paths, "pack_dir": Path(pack_dir).expanduser().resolve()}
         cfg = replace(cfg, paths=paths)
-    manifest_path = cfg.pack_dir / "PACK_MANIFEST.json"
-    if not manifest_path.is_file():
-        raise EngineRunError(f"C0 manifest does not exist: {manifest_path}")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise EngineRunError(f"cannot read C0 manifest {manifest_path}: {exc}") from exc
-    if manifest.get("contract") != "C0@1.0" or manifest.get("city") != cfg.city:
-        raise EngineRunError("C0 manifest contract/city do not match the selected C6 configuration")
-    pack_version = manifest.get("pack_version", cfg.pack_dir.name)
-    buildings_path = cfg.pack_dir / "buildings.parquet"
-    points_path = cfg.pack_dir / "vlm_points.parquet"
-    for required in (buildings_path, points_path):
-        if not required.is_file():
-            raise EngineRunError(f"required C0 input does not exist: {required}")
-
+    manifest, pack_version, buildings_path, points_path = _read_pack(cfg)
     version = engine_version or _default_engine_version()
-    if output_path is None:
-        suffix = f"_ward-{ward_id}" if ward_id is not None else ""
-        if limit_buildings is not None:
-            suffix += f"_first-{limit_buildings}"
-        output = cfg.out_dir / f"building_metrics{suffix}.parquet"
-    else:
-        output = Path(output_path).expanduser().resolve()
-    summary_path = output.with_name(f"{output.stem}.run_summary.json")
+    output = _resolve_output_path(cfg, output_path, ward_id, limit_buildings)
     log_path = output.with_name(f"{output.stem}.engine_run.log")
     _configure_logging(log_path)
 
@@ -150,21 +231,7 @@ def run_engine(
         len(points), points_path, points.attrs["load_stats"].points_per_km2,
     )
     building_file = pq.ParquetFile(buildings_path)
-    building_manifest_entry = next(
-        (entry for entry in manifest.get("files", []) if entry.get("name") == "buildings.parquet"),
-        None,
-    )
-    if (building_manifest_entry is None
-            or building_file.metadata.num_rows != building_manifest_entry.get("rows")):
-        raise EngineRunError("C0 building row count does not match PACK_MANIFEST.json")
-    required_columns = set(BUILDING_COLUMNS)
-    if not required_columns <= set(building_file.schema_arrow.names):
-        missing = sorted(required_columns - set(building_file.schema_arrow.names))
-        raise EngineRunError(f"C0 buildings are missing required columns: {', '.join(missing)}")
-    geo_metadata = json.loads((building_file.schema_arrow.metadata or {}).get(b"geo", b"{}"))
-    geometry_meta = geo_metadata.get("columns", {}).get("geometry", {})
-    if not geometry_meta.get("crs"):
-        raise EngineRunError("C0 GeoParquet buildings must declare geometry CRS")
+    _validate_building_file(building_file, manifest)
 
     processed = 0
     nonnull_vlm = 0
@@ -182,29 +249,18 @@ def run_engine(
                 if remaining <= 0:
                     break
                 frame = frame.head(remaining)
-            if frame.empty:
-                continue
-            geometry = gpd.GeoSeries.from_wkb(frame.pop("geometry"), crs="EPSG:4326")
-            buildings = gpd.GeoDataFrame(frame.reset_index(drop=True), geometry=geometry.reset_index(drop=True), crs="EPSG:4326")
-            if buildings.geometry.isna().any() or buildings.geometry.is_empty.any():
-                raise EngineRunError("C0 building chunk contains null or empty geometries")
-            if not buildings.geometry.geom_type.isin(["Polygon", "MultiPolygon"]).all():
-                raise EngineRunError("C0 building chunk contains non-polygon geometry")
-            if not buildings.geometry.is_valid.all():
-                raise EngineRunError("C0 building chunk contains invalid geometry")
-
-            assignments = assign_points_to_buildings(buildings, points, cfg, chunk_size=chunk_size)
-            distortions = compute_building_distortion(buildings, points, cfg)
             part_path = part_dir / f"part-{len(part_paths):06d}.parquet"
-            export_info = export_building_metrics(
-                buildings, assignments, distortions, cfg, part_path, engine_version=version,
+            rows, batch_nonnull_vlm = _process_batch(
+                frame, gpd, points, cfg, part_path, chunk_size, version,
             )
+            if rows == 0:
+                continue
             part_paths.append(part_path)
-            processed += export_info["rows"]
-            nonnull_vlm += int(assignments["vlm_mm_yr"].notna().sum())
+            processed += rows
+            nonnull_vlm += batch_nonnull_vlm
             LOGGER.info(
                 "Finished chunk %d: %d buildings, cumulative %d, VLM coverage %.4f, elapsed %.1fs",
-                len(part_paths), export_info["rows"], processed,
+                len(part_paths), rows, processed,
                 nonnull_vlm / processed, time.perf_counter() - started,
             )
             if limit_buildings is not None and processed >= limit_buildings:
@@ -212,24 +268,10 @@ def run_engine(
 
         _combine_parquet_parts(part_paths, output)
 
-    summary = {
-        "contract": "C1@1.0",
-        "city": cfg.city,
-        "pack_version": pack_version,
-        "engine_version": version,
-        "seed": cfg.seed,
-        "params": dict(cfg.params),
-        "params_hash": pq.ParquetFile(output).schema_arrow.metadata[b"params_hash"].decode("ascii"),
-        "buildings_processed": processed,
-        "non_null_vlm_buildings": nonnull_vlm,
-        "non_null_vlm_share": nonnull_vlm / processed if processed else 0.0,
-        "chunk_size": chunk_size,
-        "ward_id_filter": ward_id,
-        "limit_buildings": limit_buildings,
-        "output": str(output),
-        "elapsed_seconds": round(time.perf_counter() - started, 3),
-    }
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    summary = _write_run_summary(
+        output, pack_version, version, cfg, processed, nonnull_vlm,
+        chunk_size, ward_id, limit_buildings, started,
+    )
     LOGGER.info(
         "Completed %d buildings; non-null VLM share %.4f; output %s",
         processed, summary["non_null_vlm_share"], output,
@@ -258,3 +300,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

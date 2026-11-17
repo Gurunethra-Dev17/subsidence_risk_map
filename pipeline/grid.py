@@ -9,8 +9,12 @@ import math
 from pathlib import Path
 from typing import Any
 
+from pipeline.paths import pack_destination
+
 
 LOG = logging.getLogger("pipeline.grid")
+GEOGRAPHIC_CRS = "EPSG:4326"
+GRID_FILENAME = "grid_250m.geojson"
 
 
 def _polygonal_only(geometry: Any, shapely: Any) -> tuple[Any, int]:
@@ -18,36 +22,30 @@ def _polygonal_only(geometry: Any, shapely: Any) -> tuple[Any, int]:
     if geometry is None or geometry.is_empty:
         return None, 0
     if geometry.geom_type == "Polygon":
-        holes = []
-        discarded = 0
-        for ring in geometry.interiors:
-            coordinates = list(ring.coords)
-            if len(set(coordinates[:-1])) < 3 or shapely.Polygon(ring).area <= 0:
-                discarded += 1
-            else:
-                holes.append(coordinates)
-        cleaned = shapely.Polygon(geometry.exterior.coords, holes)
-        if cleaned.is_valid:
-            return cleaned, discarded
-        fixed, extra_discarded = _polygonal_only(shapely.make_valid(cleaned), shapely)
-        return fixed, discarded + extra_discarded
-    if geometry.geom_type == "MultiPolygon":
-        polygons = []
-        discarded = 0
-        for part in shapely.get_parts(geometry):
-            polygonal, dropped = _polygonal_only(part, shapely)
-            discarded += dropped
-            if polygonal is not None:
-                polygons.extend(shapely.get_parts(polygonal))
-        if not polygons:
-            return None, discarded
-        return shapely.union_all(polygons), discarded
-    if geometry.geom_type != "GeometryCollection":
+        return _clean_polygon(geometry, shapely)
+    if geometry.geom_type not in {"MultiPolygon", "GeometryCollection"}:
         return None, 1
+    return _polygonal_parts(shapely.get_parts(geometry), shapely)
 
-    polygons: list[Any] = []
-    discarded = 0
-    for part in shapely.get_parts(geometry):
+
+def _clean_polygon(polygon: Any, shapely: Any) -> tuple[Any, int]:
+    holes, discarded = [], 0
+    for ring in polygon.interiors:
+        coordinates = list(ring.coords)
+        if len(set(coordinates[:-1])) < 3 or shapely.Polygon(ring).area <= 0:
+            discarded += 1
+        else:
+            holes.append(coordinates)
+    cleaned = shapely.Polygon(polygon.exterior.coords, holes)
+    if cleaned.is_valid:
+        return cleaned, discarded
+    fixed, extra = _polygonal_only(shapely.make_valid(cleaned), shapely)
+    return fixed, discarded + extra
+
+
+def _polygonal_parts(parts: Any, shapely: Any) -> tuple[Any, int]:
+    polygons, discarded = [], 0
+    for part in parts:
         polygonal, dropped = _polygonal_only(part, shapely)
         discarded += dropped
         if polygonal is not None:
@@ -55,9 +53,7 @@ def _polygonal_only(geometry: Any, shapely: Any) -> tuple[Any, int]:
                 polygons.append(polygonal)
             else:
                 polygons.extend(shapely.get_parts(polygonal))
-    if not polygons:
-        return None, discarded
-    return shapely.union_all(polygons), discarded
+    return (shapely.union_all(polygons) if polygons else None), discarded
 
 
 def _geo_modules() -> tuple[Any, Any, Any]:
@@ -70,6 +66,62 @@ def _geo_modules() -> tuple[Any, Any, Any]:
             "The grid pipeline needs the optional geo dependencies; install the project with [geo]."
         ) from exc
     return gpd, pd, shapely
+
+
+def _grid_records(city_shape: Any, city: str, grid_m: int, shapely: Any) -> tuple[list[dict[str, Any]], int, int]:
+    min_x, min_y, max_x, max_y = city_shape.bounds
+    x_range = range(math.floor(min_x / grid_m), math.ceil(max_x / grid_m))
+    y_range = range(math.floor(min_y / grid_m), math.ceil(max_y / grid_m))
+    records, repaired_cells, discarded_parts = [], 0, 0
+    for ix in x_range:
+        for iy in y_range:
+            clipped = shapely.box(
+                ix * grid_m, iy * grid_m, (ix + 1) * grid_m, (iy + 1) * grid_m
+            ).intersection(city_shape)
+            if clipped.is_empty or clipped.area <= 0:
+                continue
+            if not clipped.is_valid:
+                clipped = shapely.make_valid(clipped)
+                repaired_cells += 1
+            clipped, discarded = _polygonal_only(clipped, shapely)
+            discarded_parts += discarded
+            if clipped is None or clipped.is_empty or clipped.area <= 0:
+                continue
+            if not clipped.is_valid:
+                raise ValueError(
+                    f"Grid intersection produced invalid geometry for cell {city.upper()}_{grid_m}M_{ix}_{iy}"
+                )
+            records.append({"cell_id": f"{city.upper()}_{grid_m}M_{ix}_{iy}", "geometry": clipped})
+    return records, repaired_cells, discarded_parts
+
+
+def _assign_majority_ward(gpd: Any, cells: Any, wards: Any, pd: Any) -> Any:
+    intersections = gpd.sjoin(cells, wards, how="left", predicate="intersects")
+    intersections["_overlap_m2"] = [
+        cells.geometry.iloc[int(cell_index)].intersection(wards.geometry.iloc[int(ward_index)]).area
+        if not pd.isna(ward_index) else 0.0
+        for cell_index, ward_index in zip(intersections.index, intersections["index_right"], strict=True)
+    ]
+    intersections = intersections.sort_values(
+        ["cell_id", "_overlap_m2", "ward_id"], ascending=[True, False, True], kind="stable", na_position="last"
+    )
+    majority = intersections.drop_duplicates("cell_id").set_index("cell_id")["ward_id"]
+    cells["ward_id"] = cells["cell_id"].map(majority).astype("string")
+    return cells
+
+
+def _geographic_geometries(cells: Any, shapely: Any) -> tuple[list[Any], int, int]:
+    geometries, repaired, discarded_parts = [], 0, 0
+    for geometry in cells.geometry:
+        if not geometry.is_valid:
+            geometry = shapely.make_valid(geometry)
+            repaired += 1
+        geometry, discarded = _polygonal_only(geometry, shapely)
+        discarded_parts += discarded
+        if geometry is None or geometry.is_empty or not geometry.is_valid:
+            raise ValueError("Generated grid contains invalid polygon geometry after CRS conversion")
+        geometries.append(geometry)
+    return geometries, repaired, discarded_parts
 
 
 def generate_grid(
@@ -106,61 +158,16 @@ def generate_grid(
     if city_shape.is_empty or not city_shape.is_valid:
         raise ValueError("The union of ward polygons must be non-empty and valid")
 
-    min_x, min_y, max_x, max_y = city_shape.bounds
-    min_ix, max_ix = math.floor(min_x / grid_m), math.ceil(max_x / grid_m)
-    min_iy, max_iy = math.floor(min_y / grid_m), math.ceil(max_y / grid_m)
-    records = []
-    repaired_cells = 0
-    discarded_parts = 0
-    for ix in range(min_ix, max_ix):
-        x0 = ix * grid_m
-        for iy in range(min_iy, max_iy):
-            y0 = iy * grid_m
-            clipped = shapely.box(x0, y0, x0 + grid_m, y0 + grid_m).intersection(city_shape)
-            if clipped.is_empty or clipped.area <= 0:
-                continue
-            if not clipped.is_valid:
-                clipped = shapely.make_valid(clipped)
-                repaired_cells += 1
-            clipped, discarded = _polygonal_only(clipped, shapely)
-            discarded_parts += discarded
-            if clipped is None or clipped.is_empty or clipped.area <= 0:
-                continue
-            if not clipped.is_valid:
-                raise ValueError(f"Grid intersection produced invalid geometry for cell {city.upper()}_{grid_m}M_{ix}_{iy}")
-            records.append(
-                {
-                    "cell_id": f"{city.upper()}_{grid_m}M_{ix}_{iy}",
-                    "geometry": clipped,
-                }
-            )
+    records, repaired_cells, discarded_parts = _grid_records(city_shape, city, grid_m, shapely)
 
     cells = gpd.GeoDataFrame(records, geometry="geometry", crs=f"EPSG:{utm_epsg}")
     if cells.empty:
         raise ValueError("No grid cells intersect the configured ward boundaries")
-    intersections = gpd.sjoin(cells, wards, how="left", predicate="intersects")
-    intersections["_overlap_m2"] = [
-        cells.geometry.iloc[int(cell_index)].intersection(wards.geometry.iloc[int(ward_index)]).area
-        if not pd.isna(ward_index)
-        else 0.0
-        for cell_index, ward_index in zip(intersections.index, intersections["index_right"], strict=True)
-    ]
-    intersections = intersections.sort_values(
-        ["cell_id", "_overlap_m2", "ward_id"], ascending=[True, False, True], kind="stable", na_position="last"
-    )
-    majority = intersections.drop_duplicates("cell_id").set_index("cell_id")["ward_id"]
-    cells["ward_id"] = cells["cell_id"].map(majority).astype("string")
-    cells = cells[["cell_id", "ward_id", "geometry"]].to_crs("EPSG:4326")
-    geographic_geometries = []
-    for geometry in cells.geometry:
-        if not geometry.is_valid:
-            geometry = shapely.make_valid(geometry)
-            repaired_cells += 1
-        geometry, discarded = _polygonal_only(geometry, shapely)
-        discarded_parts += discarded
-        if geometry is None or geometry.is_empty or not geometry.is_valid:
-            raise ValueError("Generated grid contains invalid polygon geometry after CRS conversion")
-        geographic_geometries.append(geometry)
+    cells = _assign_majority_ward(gpd, cells, wards, pd)
+    cells = cells[["cell_id", "ward_id", "geometry"]].to_crs(GEOGRAPHIC_CRS)
+    geographic_geometries, repaired_geo, discarded_geo = _geographic_geometries(cells, shapely)
+    repaired_cells += repaired_geo
+    discarded_parts += discarded_geo
     cells[cells.geometry.name] = geographic_geometries
     if cells["cell_id"].isna().any() or cells["cell_id"].duplicated().any():
         raise ValueError("Generated cell IDs must be non-null and unique")
@@ -192,7 +199,7 @@ def process_from_config(
     pack_dir = Path(config["paths"]["pack_dir"])
     if not pack_dir.is_absolute():
         pack_dir = config_path.resolve().parents[1] / pack_dir
-    destination = output_path or (pack_dir / "grid_250m.geojson")
+    destination = pack_destination(pack_dir, output_path, GRID_FILENAME)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     grid_m = int(config["params"]["grid_m"])

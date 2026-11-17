@@ -10,6 +10,7 @@ from typing import Any
 
 
 LOG = logging.getLogger("pipeline.risk")
+GEOGRAPHIC_CRS = "EPSG:4326"
 
 SOURCE_FIELDS = {
     "risk_insar": "risk_insar",
@@ -51,7 +52,7 @@ def convert_risk_layer(
     selected = [folded[name.casefold()] for name in SOURCE_FIELDS]
     if source_id:
         selected = [source_id, *selected]
-    frame = frame[[*selected, geometry_name]].copy().to_crs("EPSG:4326")
+    frame = frame[[*selected, geometry_name]].copy().to_crs(GEOGRAPHIC_CRS)
 
     if frame.geometry.isna().any() or frame.geometry.is_empty.any():
         raise ValueError("Risk source contains null or empty geometry")
@@ -75,13 +76,13 @@ def convert_risk_layer(
         risk_counts[target_name] = {str(int(k)): int(v) for k, v in counts.items()}
         output[target_name] = values.astype("Int8")
 
-    output = gpd.GeoDataFrame(output, geometry=frame.geometry, crs="EPSG:4326")
+    output = gpd.GeoDataFrame(output, geometry=frame.geometry, crs=GEOGRAPHIC_CRS)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output.to_parquet(output_path, index=False, compression="snappy")
 
     stats: dict[str, Any] = {
         "rows": len(output),
-        "crs": "EPSG:4326",
+        "crs": GEOGRAPHIC_CRS,
         "geometry_types": output.geometry.geom_type.value_counts().to_dict(),
         "risk_null_counts": missing_counts,
         "risk_category_counts": risk_counts,

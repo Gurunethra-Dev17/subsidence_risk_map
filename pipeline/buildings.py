@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from pipeline.paths import pack_destination
+
 
 LOG = logging.getLogger("pipeline.buildings")
 ALLOWED_SOURCES = {"osm", "google", "microsoft", "esri", "vt"}
@@ -40,7 +42,7 @@ def _read_layer(gpd: Any, path: Path) -> Any:
 
 
 def _polygonal(geometry: Any, classes: Any) -> Any:
-    GeometryCollection, MultiPolygon, Polygon, _, unary_union = classes
+    geometry_collection_type, multi_polygon_type, polygon_type, _, unary_union = classes
     if geometry is None or geometry.is_empty:
         return None
     try:
@@ -49,18 +51,21 @@ def _polygonal(geometry: Any, classes: Any) -> Any:
         import shapely
 
         repaired = geometry if geometry.is_valid else shapely.make_valid(geometry)
-    if isinstance(repaired, Polygon):
+    if isinstance(repaired, (polygon_type, multi_polygon_type)):
         return repaired
-    if isinstance(repaired, MultiPolygon):
-        return repaired
-    if isinstance(repaired, GeometryCollection) or hasattr(repaired, "geoms"):
-        parts = []
-        for part in repaired.geoms:
-            polygon = _polygonal(part, classes)
-            if polygon is not None:
-                parts.extend(list(polygon.geoms) if isinstance(polygon, MultiPolygon) else [polygon])
-        return unary_union(parts) if parts else None
+    if isinstance(repaired, geometry_collection_type) or hasattr(repaired, "geoms"):
+        return _union_polygonal_parts(repaired.geoms, classes, multi_polygon_type, unary_union)
     return None
+
+
+def _union_polygonal_parts(parts: Any, classes: Any, multi_polygon_type: Any, unary_union: Any) -> Any:
+    polygons = []
+    for part in parts:
+        polygon = _polygonal(part, classes)
+        if polygon is None:
+            continue
+        polygons.extend(list(polygon.geoms) if isinstance(polygon, multi_polygon_type) else [polygon])
+    return unary_union(polygons) if polygons else None
 
 
 def _stable_id(source: str, source_id: Any, geometry: Any, shapely: Any) -> str:
@@ -130,6 +135,64 @@ def _assign_ids(
     return buildings
 
 
+def _normalize_input_chunk(
+    gpd: Any,
+    source: str,
+    id_column: str,
+    input_path: Path,
+    city_box: Any,
+    shapely: Any,
+    classes: Any,
+) -> tuple[Any, int]:
+    if source != "auto" and source not in ALLOWED_SOURCES:
+        raise ValueError(f"Unsupported C0 source {source!r}; choose from {sorted(ALLOWED_SOURCES)} or auto")
+    frame = _read_layer(gpd, input_path)
+    if id_column not in frame.columns:
+        raise ValueError(f"{input_path} has no source ID column {id_column!r}")
+    if source == "auto":
+        if "sources" not in frame.columns:
+            raise ValueError(f"{input_path} has no Overture sources provenance column")
+        frame["_c0_source"] = frame["sources"].map(_overture_source_code)
+    else:
+        frame["_c0_source"] = source
+    input_rows = len(frame)
+    frame = frame.to_crs("EPSG:4326")
+    frame = frame.loc[frame.geometry.notna() & ~frame.geometry.is_empty].copy()
+    frame[frame.geometry.name] = frame.geometry.map(lambda geom: _polygonal(geom, classes))
+    frame = frame.loc[frame.geometry.notna() & ~frame.geometry.is_empty].copy()
+    frame = frame.loc[frame.geometry.intersects(city_box)].copy()
+    frame["source"] = frame["_c0_source"]
+    frame["bldg_id"] = [
+        _stable_id(source_code, source_id, geometry, shapely)
+        for source_code, source_id, geometry in zip(frame["source"], frame[id_column], frame.geometry, strict=True)
+    ]
+    chunk = frame[["bldg_id", "source"]].copy()
+    chunk["geometry"] = frame.geometry
+    return gpd.GeoDataFrame(chunk, geometry="geometry", crs="EPSG:4326"), input_rows
+
+
+def _deduplicate_measure(
+    gpd: Any, pd: Any, chunks: list[Any], utm_epsg: int, min_area_m2: float, shapely: Any
+) -> Any:
+    buildings = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True), geometry="geometry", crs="EPSG:4326")
+    buildings = buildings.drop_duplicates("bldg_id", keep="first")
+    buildings["_geometry_key"] = buildings.geometry.map(
+        lambda geom: shapely.to_wkb(shapely.normalize(geom), hex=True)
+    )
+    buildings = buildings.drop_duplicates("_geometry_key", keep="first").drop(columns="_geometry_key")
+    metric = buildings.to_crs(epsg=utm_epsg)
+    buildings["footprint_m2"] = metric.geometry.area.astype("float64")
+    return buildings.loc[buildings["footprint_m2"] >= min_area_m2].copy()
+
+
+def _validate_boundaries(wards: Any, grid: Any) -> None:
+    for label, frame, id_column in (("wards", wards, "ward_id"), ("grid", grid, "cell_id")):
+        if id_column not in frame.columns:
+            raise ValueError(f"{label} layer is missing required ID column {id_column!r}")
+        if frame[id_column].isna().any() or frame[id_column].duplicated().any():
+            raise ValueError(f"{label} layer must have non-null, unique {id_column} values")
+
+
 def prepare_buildings(
     *,
     input_specs: list[tuple[str, str, Path]],
@@ -154,53 +217,16 @@ def prepare_buildings(
         raise ValueError("Provide at least one --input SOURCE ID_COLUMN PATH")
 
     city_box = box(*bbox)
-    chunks = []
-    before_count = 0
+    chunks, before_count = [], 0
     for source, id_column, input_path in input_specs:
-        if source != "auto" and source not in ALLOWED_SOURCES:
-            raise ValueError(f"Unsupported C0 source {source!r}; choose from {sorted(ALLOWED_SOURCES)} or auto")
-        frame = _read_layer(gpd, input_path)
-        if id_column not in frame.columns:
-            raise ValueError(f"{input_path} has no source ID column {id_column!r}")
-        if source == "auto":
-            if "sources" not in frame.columns:
-                raise ValueError(f"{input_path} has no Overture sources provenance column")
-            frame["_c0_source"] = frame["sources"].map(_overture_source_code)
-        else:
-            frame["_c0_source"] = source
-        before_count += len(frame)
-        frame = frame.to_crs("EPSG:4326")
-        frame = frame.loc[frame.geometry.notna() & ~frame.geometry.is_empty].copy()
-        frame[frame.geometry.name] = frame.geometry.map(lambda geom: _polygonal(geom, classes))
-        frame = frame.loc[frame.geometry.notna() & ~frame.geometry.is_empty].copy()
-        frame = frame.loc[frame.geometry.intersects(city_box)].copy()
-        frame["source"] = frame["_c0_source"]
-        frame["bldg_id"] = [
-            _stable_id(source_code, source_id, geometry, shapely)
-            for source_code, source_id, geometry in zip(frame["source"], frame[id_column], frame.geometry, strict=True)
-        ]
-        chunk = frame[["bldg_id", "source"]].copy()
-        chunk["geometry"] = frame.geometry
-        chunks.append(gpd.GeoDataFrame(chunk, geometry="geometry", crs="EPSG:4326"))
-
-    buildings = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True), geometry="geometry", crs="EPSG:4326")
-    buildings = buildings.drop_duplicates("bldg_id", keep="first")
-    buildings["_geometry_key"] = buildings.geometry.map(
-        lambda geom: shapely.to_wkb(shapely.normalize(geom), hex=True)
-    )
-    buildings = buildings.drop_duplicates("_geometry_key", keep="first").drop(columns="_geometry_key")
-
-    metric = buildings.to_crs(epsg=utm_epsg)
-    buildings["footprint_m2"] = metric.geometry.area.astype("float64")
-    buildings = buildings.loc[buildings["footprint_m2"] >= min_area_m2].copy()
+        chunk, input_rows = _normalize_input_chunk(gpd, source, id_column, input_path, city_box, shapely, classes)
+        chunks.append(chunk)
+        before_count += input_rows
+    buildings = _deduplicate_measure(gpd, pd, chunks, utm_epsg, min_area_m2, shapely)
 
     wards = _read_layer(gpd, wards_path).to_crs("EPSG:4326")
     grid = _read_layer(gpd, grid_path).to_crs("EPSG:4326")
-    for label, frame, id_column in (("wards", wards, "ward_id"), ("grid", grid, "cell_id")):
-        if id_column not in frame.columns:
-            raise ValueError(f"{label} layer is missing required ID column {id_column!r}")
-        if frame[id_column].isna().any() or frame[id_column].duplicated().any():
-            raise ValueError(f"{label} layer must have non-null, unique {id_column} values")
+    _validate_boundaries(wards, grid)
     buildings = buildings.reset_index(drop=True)
     centroid_geometries = buildings.to_crs(epsg=utm_epsg).geometry.centroid.to_crs("EPSG:4326")
     buildings = _assign_ids(gpd, buildings, wards, "ward_id", "ward_id", centroid_geometries)
@@ -236,7 +262,7 @@ def process_from_config(
     pack_dir = Path(config["paths"]["pack_dir"])
     if not pack_dir.is_absolute():
         pack_dir = config_path.resolve().parents[1] / pack_dir
-    destination = output_path or (pack_dir / "buildings.parquet")
+    destination = pack_destination(pack_dir, output_path, "buildings.parquet")
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     buildings, stats = prepare_buildings(

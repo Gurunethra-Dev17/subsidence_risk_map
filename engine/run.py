@@ -83,35 +83,24 @@ def _combine_parquet_parts(parts: list[Path], destination: Path) -> None:
         raise
 
 
-def _resolve_output_path(cfg, output_path, ward_id, limit_buildings) -> Path:
-    """Keep all runner artifacts inside the repository's ignored out folder."""
-    repo_root = Path(__file__).resolve().parents[1]
-    output_root = (repo_root / "out").resolve()
-    configured_dir = Path(cfg.out_dir).resolve()
-    try:
-        configured_dir.relative_to(output_root)
-    except ValueError as exc:
-        raise EngineRunError("C6 out_dir must resolve beneath the repository out/ directory") from exc
+def _run_output_paths() -> tuple[Path, Path, Path]:
+    """Build artifact paths from a fixed project directory, never from CLI paths."""
+    output_dir = Path(__file__).resolve().parents[1] / "out" / "delhi"
+    output = output_dir / "building_metrics.parquet"
+    summary = output_dir / "building_metrics.run_summary.json"
+    log = output_dir / "building_metrics.engine_run.log"
+    return output, summary, log
 
-    if output_path is None:
-        suffix = f"_ward-{ward_id}" if ward_id is not None else ""
-        if limit_buildings is not None:
-            suffix += f"_first-{limit_buildings}"
-        candidate = configured_dir / f"building_metrics{suffix}.parquet"
-    else:
-        supplied = Path(output_path).expanduser()
-        if supplied.is_absolute():
-            candidate = supplied
-        elif supplied.parts and supplied.parts[0].casefold() == "out":
-            candidate = repo_root / supplied
-        else:
-            candidate = configured_dir / supplied
-    resolved = candidate.resolve()
-    try:
-        resolved.relative_to(output_root)
-    except ValueError as exc:
-        raise EngineRunError("--output must resolve beneath the repository out/ directory") from exc
-    return resolved
+
+def _validate_run_limits(chunk_size, limit_buildings) -> None:
+    if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size <= 0:
+        raise EngineRunError("chunk_size must be a positive integer")
+    if limit_buildings is not None and (
+        not isinstance(limit_buildings, int)
+        or isinstance(limit_buildings, bool)
+        or limit_buildings <= 0
+    ):
+        raise EngineRunError("limit_buildings must be a positive integer")
 
 
 def _read_pack(cfg):
@@ -168,7 +157,7 @@ def _process_batch(frame, gpd, points, cfg, part_path, chunk_size, version):
     return export_info["rows"], int(assignments["vlm_mm_yr"].notna().sum())
 
 
-def _write_run_summary(output, pack_version, version, cfg, processed, nonnull_vlm,
+def _write_run_summary(summary_path, output, pack_version, version, cfg, processed, nonnull_vlm,
                        chunk_size, ward_id, limit_buildings, started):
     metadata = pq.ParquetFile(output).schema_arrow.metadata
     summary = {
@@ -181,58 +170,27 @@ def _write_run_summary(output, pack_version, version, cfg, processed, nonnull_vl
         "limit_buildings": limit_buildings, "output": str(output),
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
-    summary_path = output.with_name(f"{output.stem}.run_summary.json")
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
 
-def run_engine(
-    config_path: str | Path,
-    *,
-    pack_dir: str | Path | None = None,
-    output_path: str | Path | None = None,
-    chunk_size: int = 10_000,
-    ward_id: str | None = None,
-    limit_buildings: int | None = None,
-    engine_version: str | None = None,
-) -> dict:
-    """Stream C0 buildings in chunks and produce a C1 Parquet file.
-
-    The input C0 buildings are GeoParquet, read as Arrow record batches. Each
-    batch is converted to a GeoDataFrame, processed by A2/A3, exported as a
-    temporary C1 fragment, and appended to the final Parquet file. A ward filter
-    and row limit support repeatable pilot benchmarks without loading the city
-    into memory.
-    """
-    if chunk_size <= 0:
-        raise EngineRunError("chunk_size must be a positive integer")
-    if limit_buildings is not None and limit_buildings <= 0:
-        raise EngineRunError("limit_buildings must be a positive integer")
-    cfg = load_config(str(config_path))
-    if pack_dir is not None:
-        paths = {**cfg.paths, "pack_dir": Path(pack_dir).expanduser().resolve()}
-        cfg = replace(cfg, paths=paths)
-    manifest, pack_version, buildings_path, points_path = _read_pack(cfg)
-    version = engine_version or _default_engine_version()
-    output = _resolve_output_path(cfg, output_path, ward_id, limit_buildings)
-    log_path = output.with_name(f"{output.stem}.engine_run.log")
-    _configure_logging(log_path)
-
+def _load_geo_runtime(cfg, points_path):
     try:
         import geopandas as gpd
     except ImportError as exc:  # pragma: no cover - optional geo dependencies
         raise EngineRunError(
             "engine.run requires the 'geo' extra; install with pip install -e '.[geo]'"
         ) from exc
-
     points = load_vlm_points(cfg, path=str(points_path))
     LOGGER.info(
         "Loaded %d in-bbox VLM points from %s; bbox density %.3f points/km2",
         len(points), points_path, points.attrs["load_stats"].points_per_km2,
     )
-    building_file = pq.ParquetFile(buildings_path)
-    _validate_building_file(building_file, manifest)
+    return gpd, points
 
+
+def _process_building_file(building_file, gpd, points, cfg, output, chunk_size,
+                           ward_id, limit_buildings, version):
     processed = 0
     nonnull_vlm = 0
     part_paths = []
@@ -240,7 +198,8 @@ def run_engine(
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="engine-c1-parts-", dir=output.parent) as tmp:
         part_dir = Path(tmp)
-        for source_batch in building_file.iter_batches(batch_size=chunk_size, columns=BUILDING_COLUMNS):
+        batches = building_file.iter_batches(batch_size=chunk_size, columns=BUILDING_COLUMNS)
+        for source_batch in batches:
             frame = source_batch.to_pandas()
             if ward_id is not None:
                 frame = frame.loc[frame["ward_id"].astype("string") == str(ward_id)]
@@ -265,11 +224,46 @@ def run_engine(
             )
             if limit_buildings is not None and processed >= limit_buildings:
                 break
-
         _combine_parquet_parts(part_paths, output)
+    return processed, nonnull_vlm, started
+
+
+def run_engine(
+    config_path: str | Path,
+    *,
+    pack_dir: str | Path | None = None,
+    chunk_size: int = 10_000,
+    ward_id: str | None = None,
+    limit_buildings: int | None = None,
+    engine_version: str | None = None,
+) -> dict:
+    """Stream C0 buildings in chunks and produce a C1 Parquet file.
+
+    The input C0 buildings are GeoParquet, read as Arrow record batches. Each
+    batch is converted to a GeoDataFrame, processed by A2/A3, exported as a
+    temporary C1 fragment, and appended to the final Parquet file. A ward filter
+    and row limit support repeatable pilot benchmarks without loading the city
+    into memory.
+    """
+    _validate_run_limits(chunk_size, limit_buildings)
+    cfg = load_config(str(config_path))
+    if pack_dir is not None:
+        paths = {**cfg.paths, "pack_dir": Path(pack_dir).expanduser().resolve()}
+        cfg = replace(cfg, paths=paths)
+    manifest, pack_version, buildings_path, points_path = _read_pack(cfg)
+    version = engine_version or _default_engine_version()
+    output, summary_path, log_path = _run_output_paths()
+    _configure_logging(log_path)
+    gpd, points = _load_geo_runtime(cfg, points_path)
+    building_file = pq.ParquetFile(buildings_path)
+    _validate_building_file(building_file, manifest)
+    processed, nonnull_vlm, started = _process_building_file(
+        building_file, gpd, points, cfg, output, chunk_size,
+        ward_id, limit_buildings, version,
+    )
 
     summary = _write_run_summary(
-        output, pack_version, version, cfg, processed, nonnull_vlm,
+        summary_path, output, pack_version, version, cfg, processed, nonnull_vlm,
         chunk_size, ward_id, limit_buildings, started,
     )
     LOGGER.info(
@@ -284,14 +278,13 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Compute C1 building metrics from a C0 pack")
     parser.add_argument("--config", default="configs/delhi.yaml", help="C6 config YAML path")
     parser.add_argument("--pack-dir", type=Path, help="local C0 pack folder override")
-    parser.add_argument("--output", type=Path, help="C1 Parquet output path")
     parser.add_argument("--chunk-size", type=int, default=10_000, help="buildings processed per chunk")
     parser.add_argument("--ward-id", help="process only this C0 ward (useful for pilot benchmarks)")
     parser.add_argument("--limit-buildings", type=int, help="process at most this many matched buildings")
     parser.add_argument("--engine-version", help="version recorded in C1 rows/metadata (default: git commit)")
     args = parser.parse_args(argv)
     run_engine(
-        args.config, pack_dir=args.pack_dir, output_path=args.output,
+        args.config, pack_dir=args.pack_dir,
         chunk_size=args.chunk_size, ward_id=args.ward_id,
         limit_buildings=args.limit_buildings, engine_version=args.engine_version,
     )

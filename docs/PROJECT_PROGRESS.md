@@ -9,7 +9,7 @@ This document records what has been implemented in the repository so far, how it
 
 The shared H0 repository scaffold was committed to `main`. Person A has implemented the C6/VLM input loader and building point-assignment module on `a/config-point-loaders`. A CI failure caused by an incorrect Shapely import in the VLM loader was fixed in commit `e298e3f` and pushed. GitHub Actions CI run #8 passed on the updated branch; PR #1 is open: https://github.com/Gurunethra-Dev17/subsidence_risk_map/pull/1. The C4@1.0 OpenAPI description has been aligned on `a/c4-openapi-alignment`; the API implementation remains outstanding.
 
-The core geospatial engine is still in progress. A1/A2 are implemented, and the focused VLM loader integration test passes locally. A3 angular-distortion calculation, A4 regression tests, and the independent A6 C1 Parquet exporter are implemented on `a/building-distortion`. A5 benchmarking/CLI work depends on B's real C0 pack; A7 robustness runs and real data preparation remain outstanding.
+The core geospatial engine is still in progress. A1/A2 are implemented, and the focused VLM loader integration test passes locally. A3 angular-distortion calculation, A4 regression tests, and the independent A6 C1 Parquet exporter are implemented on `a/building-distortion`. A5 benchmarking/CLI work depends on B's real C0 pack. A7 robustness runner is implemented independently; real-data runs remain pending a valid building file.
 
 ## Work completed
 
@@ -63,9 +63,13 @@ New synthetic tests cover source-unit conversion, bbox boundaries, weighted quan
 
 A4 adds worked-example, public-interface regression, boundary, and permutation/sign-invariance checks for this calculation.
 
-### Person A A6 ? C1 Parquet export
+### Person A A6 - C1 Parquet export
 
 `engine/export.py` joins C0 building attributes with A2 assignment and A3 distortion results by `bldg_id`, validates unique and complete building coverage, and writes the C1 Parquet fields and metadata. The parameter hash is SHA-256 over canonical JSON for the C6 `params` mapping; writes use a temporary file followed by atomic replacement. The exporter reports the non-null share of `vlm_mm_yr` for the H2 handoff.
+
+### Person A A7 - parameter robustness
+
+`engine/robustness.py` runs the Cartesian product of configured radius and pair-distance variants. It reuses assignments across pair windows and distortion outputs across radii, writes each C1 export into a stable variant directory, and creates `robustness_summary.json` with each run's parameters, parameter hash, row count, and VLM coverage. Delhi and Chennai C6 configs declare `[10, 40]`, `[10, 60]`, and `[20, 60]` metre pair windows.
 
 ## Checks performed
 
@@ -79,7 +83,7 @@ A4 adds worked-example, public-interface regression, boundary, and permutation/s
 - The subsequent CI run found a separate VLM loader import error: `points_from_xy` was imported from `shapely.geometry`, which does not provide it. Commit `e298e3f` now uses `geopandas.points_from_xy`. The focused local integration test was attempted but skipped because local geo dependencies are unavailable. GitHub Actions CI run #8 on this commit completed successfully.
 - The focused VLM loader integration test was later run locally and passed (**1 passed**) after Smart App Control was turned off for the test environment.
 - The C4 OpenAPI document now includes response/error schemas, the `/buildings` query parameters, ETag and cache policy headers, and the configured-origin CORS policy. Its YAML parses successfully; API implementation and contract tests remain outstanding.
-- A3, A4, and A6 are implemented on `a/building-distortion`. A6 export code has not yet been exercised against actual GeoParquet inputs. A5 is waiting for B's real building pack; A7 remains independent.
+- A3, A4, A6, and A7 are implemented on `a/building-distortion`. A6/A7 have passed syntax compilation and lint checks but have not yet been exercised end-to-end. A5 and real-data runs await B's valid C0 building file.
 - The synthetic C1 Parquet fixture is readable through DuckDB and its `bldg_id` values match the three synthetic C0 JSON records. Per the C0/C1 contract, `bldg_id` is the join key. The actual C0 GeoParquet geometry fixture is still absent, so spatial integration awaits Person B's fixture/confirmation.
 - DuckDB is included in the `api` optional dependency extra for reproducible API installs.
 - A local editable-install dry run reproduced the initial setuptools flat-layout discovery error. After package discovery was configured, a no-build-isolation dry run reached a separate local limitation: this environment lacks the `bdist_wheel` command. The GitHub runner uses normal build isolation with the declared `setuptools` and `wheel` build requirements; its rerun result has not been confirmed here.
@@ -105,7 +109,7 @@ The focused VLM loader integration test passes locally. A full engine run agains
 | A4 distortion and regression tests | Implemented | `engine/tests/test_distortion.py` covers examples, public interface, thresholds, edge cases, and invariants; full local suite passed before A6 work. |
 | A5 performance, memory, GeoParquet I/O, CLI, logging | Waiting on B | Requires the real C0 building pack (H1); A6 is being prepared independently. |
 | A6 C1 Parquet export | Implemented, unverified | `engine/export.py` joins metrics by `bldg_id`, writes contract metadata and reports VLM coverage; requires a code/test run before handoff. |
-| A7 parameter robustness runner | Not started | Independent of H1 and the next Person A implementation item. |
+| A7 parameter robustness runner | Implemented, unverified | `engine/robustness.py` evaluates radius/pair-window combinations, writes C1 files and a stable summary; a real-data run awaits a valid C0 building file. |
 | C4 OpenAPI description | Updated | Response/error schemas, building query parameters, cache headers, and configured-origin CORS are documented; API runtime remains outstanding. |
 | H1 real C0 data pack | Not started | B owns the dataset audit and real pack preparation. |
 | H2 C1 output from real data | Not started | Depends on the real pack and the remaining engine work. |

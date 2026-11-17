@@ -19,3 +19,7 @@ The point loader requires the optional geospatial dependencies: `pip install -e 
 ## C1 export (A6)
 
 `engine.export.export_building_metrics(buildings, assignments, distortions, cfg, output_path, engine_version=...)` joins A2/A3 results to C0 building attributes by `bldg_id` and writes the C1 Parquet contract. It checks ID coverage and uniqueness, writes the contract metadata (`contract`, `horizon_years`, `seed`, `engine_version`, and `params_hash`), and returns the row count and non-null VLM share. The parameter hash is SHA-256 over canonical JSON for the C6 `params` mapping. Output is written to a temporary file and atomically replaced at the destination. Install `.[geo]` to enable Parquet export.
+
+## Parameter robustness (A7)
+
+`engine.robustness.run_robustness(buildings, points, cfg, output_dir, engine_version=...)` runs the Cartesian product of `radius_variants_m` and `pair_distance_variants_m` from C6. Assignment work is reused across pair windows and distortion work across radii. Each C1 result is stored under `radius-<m>m/pairs-<min>-<max>m/building_metrics.parquet`; `robustness_summary.json` records the variants, hashes, row counts, and non-null VLM shares. When `pair_distance_variants_m` is omitted, the runner derives three windows from the configured baseline bounds.

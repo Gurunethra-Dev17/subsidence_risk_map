@@ -21,7 +21,9 @@ from engine.io import load_config, load_vlm_points
 
 LOGGER = logging.getLogger("engine.run")
 BUILDING_COLUMNS = ["bldg_id", "footprint_m2", "source", "ward_id", "cell_id", "geometry"]
-_OUTPUT_DIR = Path("out") / "delhi"
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_OUTPUT_ROOT = _PROJECT_ROOT / "out"
+_OUTPUT_DIR = _OUTPUT_ROOT / "delhi"
 _C1_OUTPUT_PATH = _OUTPUT_DIR / "building_metrics.parquet"
 _SUMMARY_PATH = _OUTPUT_DIR / "building_metrics.run_summary.json"
 _LOG_PATH = _OUTPUT_DIR / "building_metrics.engine_run.log"
@@ -98,6 +100,17 @@ def _validate_run_limits(chunk_size, limit_buildings) -> None:
         raise EngineRunError("limit_buildings must be a positive integer")
 
 
+def _validate_output_directory() -> None:
+    project_root = _PROJECT_ROOT.resolve()
+    output_root = _OUTPUT_ROOT.resolve()
+    output_dir = _OUTPUT_DIR.resolve()
+    if not output_root.is_relative_to(project_root):
+        raise EngineRunError("project out/ directory must resolve beneath the repository root")
+    if not output_dir.is_relative_to(output_root):
+        raise EngineRunError("engine output directory must resolve beneath project out/")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+
 def _read_pack(cfg):
     manifest_path = cfg.pack_dir / "PACK_MANIFEST.json"
     if not manifest_path.is_file():
@@ -165,7 +178,16 @@ def _write_run_summary(pack_version, version, cfg, processed, nonnull_vlm,
         "limit_buildings": limit_buildings, "output": str(_C1_OUTPUT_PATH),
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
-    _SUMMARY_PATH.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    project_root = _PROJECT_ROOT.resolve()
+    allowed_root = _OUTPUT_ROOT.resolve()
+    summary_path = _SUMMARY_PATH.resolve()
+    if not allowed_root.is_relative_to(project_root):
+        raise EngineRunError("project out/ directory must resolve beneath the repository root")
+    try:
+        summary_path.relative_to(allowed_root)
+    except ValueError as exc:
+        raise EngineRunError("run summary path must stay within the project out/ directory") from exc
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
 
@@ -248,6 +270,7 @@ def run_engine(
     manifest, pack_version, buildings_path, points_path = _read_pack(cfg)
     version = engine_version or _default_engine_version()
     output = _C1_OUTPUT_PATH
+    _validate_output_directory()
     _configure_logging(_LOG_PATH)
     gpd, points = _load_geo_runtime(cfg, points_path)
     building_file = pq.ParquetFile(buildings_path)

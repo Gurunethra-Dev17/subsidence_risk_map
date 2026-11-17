@@ -21,6 +21,10 @@ from engine.io import load_config, load_vlm_points
 
 LOGGER = logging.getLogger("engine.run")
 BUILDING_COLUMNS = ["bldg_id", "footprint_m2", "source", "ward_id", "cell_id", "geometry"]
+_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "out" / "delhi"
+_C1_OUTPUT_PATH = _OUTPUT_DIR / "building_metrics.parquet"
+_SUMMARY_PATH = _OUTPUT_DIR / "building_metrics.run_summary.json"
+_LOG_PATH = _OUTPUT_DIR / "building_metrics.engine_run.log"
 
 
 class EngineRunError(RuntimeError):
@@ -81,15 +85,6 @@ def _combine_parquet_parts(parts: list[Path], destination: Path) -> None:
         if temp_path and temp_path.exists():
             temp_path.unlink()
         raise
-
-
-def _run_output_paths() -> tuple[Path, Path, Path]:
-    """Build artifact paths from a fixed project directory, never from CLI paths."""
-    output_dir = Path(__file__).resolve().parents[1] / "out" / "delhi"
-    output = output_dir / "building_metrics.parquet"
-    summary = output_dir / "building_metrics.run_summary.json"
-    log = output_dir / "building_metrics.engine_run.log"
-    return output, summary, log
 
 
 def _validate_run_limits(chunk_size, limit_buildings) -> None:
@@ -157,9 +152,9 @@ def _process_batch(frame, gpd, points, cfg, part_path, chunk_size, version):
     return export_info["rows"], int(assignments["vlm_mm_yr"].notna().sum())
 
 
-def _write_run_summary(summary_path, output, pack_version, version, cfg, processed, nonnull_vlm,
+def _write_run_summary(pack_version, version, cfg, processed, nonnull_vlm,
                        chunk_size, ward_id, limit_buildings, started):
-    metadata = pq.ParquetFile(output).schema_arrow.metadata
+    metadata = pq.ParquetFile(_C1_OUTPUT_PATH).schema_arrow.metadata
     summary = {
         "contract": "C1@1.0", "city": cfg.city, "pack_version": pack_version,
         "engine_version": version, "seed": cfg.seed, "params": dict(cfg.params),
@@ -167,10 +162,10 @@ def _write_run_summary(summary_path, output, pack_version, version, cfg, process
         "buildings_processed": processed, "non_null_vlm_buildings": nonnull_vlm,
         "non_null_vlm_share": nonnull_vlm / processed if processed else 0.0,
         "chunk_size": chunk_size, "ward_id_filter": ward_id,
-        "limit_buildings": limit_buildings, "output": str(output),
+        "limit_buildings": limit_buildings, "output": str(_C1_OUTPUT_PATH),
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _SUMMARY_PATH.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
 
@@ -252,8 +247,8 @@ def run_engine(
         cfg = replace(cfg, paths=paths)
     manifest, pack_version, buildings_path, points_path = _read_pack(cfg)
     version = engine_version or _default_engine_version()
-    output, summary_path, log_path = _run_output_paths()
-    _configure_logging(log_path)
+    output = _C1_OUTPUT_PATH
+    _configure_logging(_LOG_PATH)
     gpd, points = _load_geo_runtime(cfg, points_path)
     building_file = pq.ParquetFile(buildings_path)
     _validate_building_file(building_file, manifest)
@@ -263,7 +258,7 @@ def run_engine(
     )
 
     summary = _write_run_summary(
-        summary_path, output, pack_version, version, cfg, processed, nonnull_vlm,
+        pack_version, version, cfg, processed, nonnull_vlm,
         chunk_size, ward_id, limit_buildings, started,
     )
     LOGGER.info(

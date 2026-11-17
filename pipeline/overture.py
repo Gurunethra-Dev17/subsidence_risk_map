@@ -51,6 +51,16 @@ def _render_bbox(bbox: tuple[float, float, float, float]) -> str:
     return ",".join(f"{coordinate:.8f}" for coordinate in bbox)
 
 
+def _raw_output_directory(config_path: Path, output_dir: Path) -> Path:
+    raw_root = config_path.resolve().parents[1] / "data" / "raw"
+    destination = output_dir.resolve()
+    try:
+        destination.relative_to(raw_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"Overture extracts must be written under {raw_root}") from exc
+    return destination
+
+
 def extract_buildings(
     *,
     config_path: Path,
@@ -66,6 +76,7 @@ def extract_buildings(
         config = yaml.safe_load(stream)
     if config.get("contract") != "C6@1.0":
         raise ValueError(f"Expected a C6@1.0 city config: {config_path}")
+    output_dir = _raw_output_directory(config_path, output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     tiles = split_bbox(config["bbox"], tile_degrees)
     output_files = [output_dir / f"building_r{row:02d}_c{column:02d}.parquet" for row, column, _ in tiles]

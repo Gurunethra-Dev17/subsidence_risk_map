@@ -8,8 +8,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from pipeline.paths import pack_destination
+
 
 LOG = logging.getLogger("pipeline.wards")
+GEOGRAPHIC_CRS = "EPSG:4326"
+WARDS_FILENAME = "wards.geojson"
 
 
 def _polygonal_only(geometry: Any, shapely: Any) -> tuple[Any, int]:
@@ -47,6 +51,18 @@ def _geo_modules() -> tuple[Any, Any, Any]:
     return gpd, shapely
 
 
+def _repair_ward_geometries(geometries: list[Any], shapely: Any) -> tuple[list[Any], int, int]:
+    fixed, repaired_count, discarded_parts = [], 0, 0
+    for geometry in geometries:
+        if geometry is not None and not geometry.is_valid:
+            geometry = shapely.make_valid(geometry)
+            repaired_count += 1
+        geometry, discarded = _polygonal_only(geometry, shapely)
+        discarded_parts += discarded
+        fixed.append(geometry)
+    return fixed, repaired_count, discarded_parts
+
+
 def normalize_wards(
     *,
     input_path: Path,
@@ -78,7 +94,7 @@ def normalize_wards(
     input_count = len(wards)
     wards = wards[[id_column, name_column, wards.geometry.name]].copy()
     wards = wards.rename(columns={id_column: "ward_id", name_column: "ward_name"})
-    wards = wards.to_crs("EPSG:4326")
+    wards = wards.to_crs(GEOGRAPHIC_CRS)
     wards = wards.loc[wards["ward_id"].notna() & wards["ward_name"].notna()].copy()
     wards["ward_id"] = wards["ward_id"].map(lambda value: str(value).strip())
     wards["ward_name"] = wards["ward_name"].map(lambda value: str(value).strip())
@@ -88,17 +104,7 @@ def normalize_wards(
         duplicates = wards.loc[wards["ward_id"].duplicated(keep=False), "ward_id"].unique().tolist()
         raise ValueError(f"Ward IDs must be unique; duplicate examples: {duplicates[:10]}")
 
-    original_geometries = wards.geometry.tolist()
-    fixed_geometries = []
-    repaired_count = 0
-    discarded_parts = 0
-    for geometry in original_geometries:
-        if geometry is not None and not geometry.is_valid:
-            geometry = shapely.make_valid(geometry)
-            repaired_count += 1
-        geometry, discarded = _polygonal_only(geometry, shapely)
-        discarded_parts += discarded
-        fixed_geometries.append(geometry)
+    fixed_geometries, repaired_count, discarded_parts = _repair_ward_geometries(wards.geometry.tolist(), shapely)
     wards[wards.geometry.name] = fixed_geometries
     wards = wards.loc[wards.geometry.notna() & ~wards.geometry.is_empty].copy()
     polygonal = wards.geometry.geom_type.isin({"Polygon", "MultiPolygon"})
@@ -115,7 +121,7 @@ def normalize_wards(
     wards["source"] = source
     wards["source_year"] = int(source_year)
     wards = wards[["ward_id", "ward_name", "city", "source", "source_year", wards.geometry.name]]
-    wards = wards.set_crs("EPSG:4326", allow_override=True).reset_index(drop=True)
+    wards = wards.set_crs(GEOGRAPHIC_CRS, allow_override=True).reset_index(drop=True)
 
     if wards["ward_id"].isna().any() or wards["ward_id"].duplicated().any():
         raise ValueError("Normalized ward IDs must be non-null and unique")
@@ -152,7 +158,7 @@ def process_from_config(
     pack_dir = Path(config["paths"]["pack_dir"])
     if not pack_dir.is_absolute():
         pack_dir = config_path.resolve().parents[1] / pack_dir
-    destination = output_path or (pack_dir / "wards.geojson")
+    destination = pack_destination(pack_dir, output_path, WARDS_FILENAME)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     wards, stats = normalize_wards(

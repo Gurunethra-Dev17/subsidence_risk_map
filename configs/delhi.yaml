@@ -22,5 +22,6 @@ params:
   sens_draws: 500
   sens_concentration: 50
   radius_variants_m: [50, 100, 150]
+  pair_distance_variants_m: [[10, 40], [10, 60], [20, 60]]
 weights: {i1: 0.30, i2: 0.35, i3: 0.20, i4: 0.15}
 mode: public

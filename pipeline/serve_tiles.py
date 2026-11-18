@@ -169,7 +169,7 @@ def make_handler(candidate_dir: Path):
                     remaining -= len(chunk)
 
         def log_message(self, format_string: str, *args):
-            print("%s - %s" % (self.address_string(), format_string % args))
+            print(f"{self.address_string()} - {format_string % args}")
 
     return TileHandler
 

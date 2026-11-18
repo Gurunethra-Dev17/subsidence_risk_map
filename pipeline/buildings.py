@@ -99,7 +99,7 @@ def _normalize_provenance(provenance: Any) -> list[Any] | tuple[Any, ...]:
     if isinstance(provenance, dict):
         provenance = [provenance]
     if not isinstance(provenance, (list, tuple)):
-        raise ValueError("Overture source=auto needs a list/dict sources field for every feature")
+        raise TypeError("Overture source=auto needs a list/dict sources field for every feature")
     return provenance
 
 

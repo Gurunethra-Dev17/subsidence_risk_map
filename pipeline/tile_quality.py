@@ -10,7 +10,6 @@ from typing import Any
 
 from pipeline.paths import pack_destination
 
-
 EXPECTED = {
     "wards": {
         "fields": {"ward_id", "ward_name", "status", "score", "rank"},
@@ -89,6 +88,7 @@ def validate_candidate(candidate_dir: Path) -> dict[str, Any]:
         actual_bytes = path.stat().st_size
         if actual_hash != item.get("sha256"):
             errors.append(f"{layer}: SHA-256 does not match manifest")
+            continue  # skip opening a corrupted archive
         if actual_bytes != item.get("bytes"):
             errors.append(f"{layer}: byte size does not match manifest")
         if (item.get("minzoom"), item.get("maxzoom")) != EXPECTED[layer]["zooms"]:
@@ -121,7 +121,7 @@ def validate_candidate(candidate_dir: Path) -> dict[str, Any]:
                 "crs": info.get("crs"),
                 "geometry_type": info.get("geometry_type"),
             })
-        except Exception as exc:  # report archive-open failures instead of hiding them
+        except Exception as exc:  # noqa: BLE001  # report archive-open failures instead of hiding them
             errors.append(f"{layer}: cannot open PMTiles layer: {exc}")
 
     omitted = set(manifest.get("omitted_layers", []))

@@ -25,7 +25,7 @@ class TileQualityTests(unittest.TestCase):
             "wards": ("wards.pmtiles", 2, ["ward_id", "ward_name", "status", "score", "rank"], "ward_id"),
             "cells": ("cells.pmtiles", 3, ["cell_id", "ward_id", "suppressed", "cell_score", "cell_rank_in_ward"], "cell_id"),
         }
-        for layer, (filename, count, fields, id_field) in fixtures.items():
+        for layer, (filename, count, _fields, _id_field) in fixtures.items():
             archive = candidate / filename
             archive.write_bytes((layer + " archive").encode())
             files.append({

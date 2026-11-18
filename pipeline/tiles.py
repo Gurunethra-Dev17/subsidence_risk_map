@@ -17,7 +17,6 @@ from typing import Any
 
 from pipeline.paths import output_destination
 
-
 TILE_PROPERTIES = ("ward_id", "ward_name", "status", "score", "rank")
 C5_ATTRIBUTION = (
     "© OpenStreetMap contributors, Microsoft, Esri Community Maps contributors, "

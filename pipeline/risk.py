@@ -8,7 +8,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-
 LOG = logging.getLogger("pipeline.risk")
 GEOGRAPHIC_CRS = "EPSG:4326"
 

@@ -11,8 +11,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree
 
+from defusedxml import ElementTree
 
 LOG = logging.getLogger("pipeline.vt")
 XLSX_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -130,7 +130,7 @@ def _date_iso(value: str) -> str | None:
     value = value.strip()
     if not value or value in {"-", "Unknown", "unknown", "Not reported"}:
         return None
-    value = value[:-2] if value.endswith(".0") else value
+    value = value.removesuffix(".0")
     try:
         return datetime.strptime(value, "%Y%m%d").date().isoformat()
     except ValueError as exc:

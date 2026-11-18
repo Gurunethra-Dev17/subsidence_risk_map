@@ -25,13 +25,20 @@ C5_ATTRIBUTION = (
 LOG = logging.getLogger("pipeline.tiles")
 
 
+def _safe_file_path(path: Path) -> Path:
+    if ".." in Path(path).parts:
+        raise ValueError(f"Path traversal detected in path: {path}")
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    return resolved
+
+
 def _metric_path(path: Path | None) -> Path | None:
     if path is None:
         return None
     resolved = output_destination(path)
-    if not resolved.is_file():
-        raise FileNotFoundError(resolved)
-    return resolved
+    return _safe_file_path(resolved)
 
 
 def _metric_table(records: Any, key: str, required: set[str], source: str, pd: Any):
@@ -119,8 +126,9 @@ def _load_building_metrics(path: Path | None, pd: Any):
 
 def build_ward_fallback(input_path: Path, output_dir: Path, city: str, version: str) -> dict[str, Any]:
     """Write one deterministic gzip GeoJSON FeatureCollection per ward."""
+    safe_input = _safe_file_path(input_path)
     output_dir = output_destination(output_dir)
-    with input_path.open("r", encoding="utf-8") as handle:
+    with safe_input.open("r", encoding="utf-8") as handle:
         source = json.load(handle)
     if source.get("type") != "FeatureCollection" or not isinstance(source.get("features"), list):
         raise ValueError("Input must be a GeoJSON FeatureCollection")
@@ -193,6 +201,115 @@ def build_ward_fallback(input_path: Path, output_dir: Path, city: str, version: 
     return manifest
 
 
+def _prepare_wards_layer(pack_dir: Path, ward_summary_path: Path | None, city: str, gpd: Any, pd: Any, np: Any):
+    wards = gpd.read_file(pack_dir / "wards.geojson")
+    wards = wards[["ward_id", "ward_name", "geometry"]].copy()
+    wards["ward_id"] = wards["ward_id"].astype("string")
+    wards["ward_name"] = wards["ward_name"].astype("string")
+    wards["status"] = pd.Series([None] * len(wards), dtype="string")
+    wards["score"] = pd.Series([np.nan] * len(wards), dtype="float64")
+    wards["rank"] = pd.Series([pd.NA] * len(wards), dtype="Int32")
+    coverage = None
+    ward_metrics = _load_ward_metrics(ward_summary_path, city, pd)
+    if ward_metrics is not None:
+        wards, coverage = _join_metrics(wards, ward_metrics, "ward_id")
+        wards["status"] = wards["status"].astype("string")
+        wards["score"] = pd.to_numeric(wards["score"], errors="raise").astype("float64")
+        wards["rank"] = pd.to_numeric(wards["rank"], errors="raise").astype("Int32")
+    return wards, coverage
+
+
+def _prepare_cells_layer(pack_dir: Path, cell_scores_path: Path | None, gpd: Any, pd: Any, np: Any):
+    cells = gpd.read_file(pack_dir / "grid_250m.geojson")
+    cells = cells[["cell_id", "ward_id", "geometry"]].copy()
+    source_cell_count = len(cells)
+    cell_area_m2 = cells.to_crs("EPSG:32643").geometry.area
+    pruned_cell_ids = cells.loc[cell_area_m2 < 1.0, "cell_id"].astype(str).tolist()
+    cells = cells.loc[cell_area_m2 >= 1.0].copy()
+    cells["cell_id"] = cells["cell_id"].astype("string")
+    cells["ward_id"] = cells["ward_id"].astype("string")
+    cells["suppressed"] = pd.Series([None] * len(cells), dtype="boolean")
+    cells["cell_score"] = pd.Series([np.nan] * len(cells), dtype="float64")
+    cells["cell_rank_in_ward"] = pd.Series([pd.NA] * len(cells), dtype="Int32")
+    coverage = None
+    cell_metrics = _load_cell_metrics(cell_scores_path, pd)
+    if cell_metrics is not None:
+        cells, coverage = _join_metrics(cells, cell_metrics, "cell_id")
+        cells["suppressed"] = cells["suppressed"].astype("boolean")
+        cells["cell_score"] = pd.to_numeric(cells["cell_score"], errors="raise").astype("float64")
+        cells["cell_rank_in_ward"] = pd.to_numeric(cells["cell_rank_in_ward"], errors="raise").astype("Int32")
+    pruned_info = {
+        "reason": "projected polygon area below 1 square metre; these degenerate slivers are dropped by PMTiles quantization",
+        "source_count": source_cell_count,
+        "pruned_count": len(pruned_cell_ids),
+        "pruned_ids": pruned_cell_ids,
+    }
+    return cells, coverage, pruned_info
+
+
+def _prepare_points_layer(pack_dir: Path, gpd: Any, pd: Any):
+    points = pd.read_parquet(pack_dir / "vlm_points.parquet")
+    points = points[["pt_id", "vlm_mm_yr", "lon", "lat"]].copy()
+    points["pt_id"] = points["pt_id"].astype("string")
+    points = gpd.GeoDataFrame(
+        points, geometry=gpd.points_from_xy(points["lon"], points["lat"]), crs="EPSG:4326"
+    )[["pt_id", "vlm_mm_yr", "geometry"]]
+    points["vlm_mm_yr"] = points["vlm_mm_yr"].astype("float64")
+    return points
+
+
+def _prepare_buildings_layer(pack_dir: Path, building_metrics_path: Path | None, gpd: Any, pd: Any, np: Any):
+    buildings = gpd.read_parquet(pack_dir / "buildings.parquet")
+    buildings = buildings[["bldg_id", "geometry"]].copy()
+    buildings["bldg_id"] = buildings["bldg_id"].astype("string")
+    buildings["vlm_mm_yr"] = pd.Series([np.nan] * len(buildings), dtype="float64")
+    buildings["beta_ratio_horizon"] = pd.Series([None] * len(buildings), dtype="string")
+    buildings["beta_class"] = pd.Series([None] * len(buildings), dtype="string")
+    buildings["sparse"] = pd.Series([pd.NA] * len(buildings), dtype="boolean")
+    coverage = None
+    building_metrics = _load_building_metrics(building_metrics_path, pd)
+    if building_metrics is not None:
+        buildings, coverage = _join_metrics(buildings, building_metrics, "bldg_id")
+        buildings["vlm_mm_yr"] = pd.to_numeric(buildings["vlm_mm_yr"], errors="raise").astype("float64")
+        for column in ("beta_ratio_horizon", "beta_class"):
+            buildings[column] = buildings[column].astype("string")
+        buildings["sparse"] = buildings["sparse"].astype("boolean")
+    return buildings, coverage
+
+
+def _write_pmtiles_layers(staging: Path, layers: list, city: str, version: str, pyogrio: Any):
+    manifest_files = []
+    for layer_name, frame, min_zoom, max_zoom, access in layers:
+        folder = staging / access
+        folder.mkdir(parents=True, exist_ok=True)
+        tile_path = folder / f"{city}-{layer_name}-{version}.pmtiles"
+        LOG.info("Building %s (%s features), zoom %s-%s", layer_name, len(frame), min_zoom, max_zoom)
+        pyogrio.write_dataframe(
+            frame,
+            tile_path,
+            driver="PMTiles",
+            layer=layer_name,
+            dataset_options={
+                "MINZOOM": str(min_zoom),
+                "MAXZOOM": str(max_zoom),
+                "NAME": f"{city.title()} {layer_name} {version}",
+                "DESCRIPTION": "C5 geometry candidate; metric joins pending",
+                "TYPE": "overlay",
+            },
+            layer_options={"NAME": layer_name, "MINZOOM": str(min_zoom), "MAXZOOM": str(max_zoom)},
+        )
+        manifest_files.append({
+            "layer": layer_name,
+            "file": f"{access}/{tile_path.name}",
+            "minzoom": min_zoom,
+            "maxzoom": max_zoom,
+            "features": len(frame),
+            "bytes": tile_path.stat().st_size,
+            "sha256": _sha256_file(tile_path),
+        })
+    return manifest_files
+
+
 def build_pmtiles(
     pack_dir: Path,
     output_dir: Path,
@@ -205,12 +322,7 @@ def build_pmtiles(
     cell_scores_path: Path | None = None,
     building_metrics_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Build the four C5 PMTiles archives from a C0 pack using GDAL's PMTiles driver.
-
-    C1/C2 exports are not inputs yet, so their contracted properties are emitted
-    as typed nulls and listed in the candidate manifest. Building tiles are put
-    under ``authority/`` as required by C5.
-    """
+    """Build the four C5 PMTiles archives from a C0 pack using GDAL's PMTiles driver."""
     try:
         import geopandas as gpd
         import numpy as np
@@ -239,110 +351,33 @@ def build_pmtiles(
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite tile output directory: {output_dir}")
 
-    wards = gpd.read_file(pack_dir / "wards.geojson")
-    wards = wards[["ward_id", "ward_name", "geometry"]].copy()
-    wards["ward_id"] = wards["ward_id"].astype("string")
-    wards["ward_name"] = wards["ward_name"].astype("string")
-    wards["status"] = pd.Series([None] * len(wards), dtype="string")
-    wards["score"] = pd.Series([np.nan] * len(wards), dtype="float64")
-    wards["rank"] = pd.Series([pd.NA] * len(wards), dtype="Int32")
     join_coverage: dict[str, dict[str, int]] = {}
-    ward_metrics = _load_ward_metrics(ward_summary_path, city, pd)
-    if ward_metrics is not None:
-        wards, join_coverage["ward_summary"] = _join_metrics(wards, ward_metrics, "ward_id")
-        wards["status"] = wards["status"].astype("string")
-        wards["score"] = pd.to_numeric(wards["score"], errors="raise").astype("float64")
-        wards["rank"] = pd.to_numeric(wards["rank"], errors="raise").astype("Int32")
+    wards, ward_cov = _prepare_wards_layer(pack_dir, ward_summary_path, city, gpd, pd, np)
+    if ward_cov:
+        join_coverage["ward_summary"] = ward_cov
 
-    cells = gpd.read_file(pack_dir / "grid_250m.geojson")
-    cells = cells[["cell_id", "ward_id", "geometry"]].copy()
-    # Tiny slivers are lost during PMTiles quantization. Prune them only from
-    # this delivery candidate and record the IDs; retain the complete C0 grid.
-    source_cell_count = len(cells)
-    cell_area_m2 = cells.to_crs("EPSG:32643").geometry.area
-    pruned_cell_ids = cells.loc[cell_area_m2 < 1.0, "cell_id"].astype(str).tolist()
-    cells = cells.loc[cell_area_m2 >= 1.0].copy()
-    cells["cell_id"] = cells["cell_id"].astype("string")
-    cells["ward_id"] = cells["ward_id"].astype("string")
-    cells["suppressed"] = pd.Series([None] * len(cells), dtype="boolean")
-    cells["cell_score"] = pd.Series([np.nan] * len(cells), dtype="float64")
-    cells["cell_rank_in_ward"] = pd.Series([pd.NA] * len(cells), dtype="Int32")
-    cell_metrics = _load_cell_metrics(cell_scores_path, pd)
-    if cell_metrics is not None:
-        cells, join_coverage["cell_scores"] = _join_metrics(cells, cell_metrics, "cell_id")
-        cells["suppressed"] = cells["suppressed"].astype("boolean")
-        cells["cell_score"] = pd.to_numeric(cells["cell_score"], errors="raise").astype("float64")
-        cells["cell_rank_in_ward"] = pd.to_numeric(cells["cell_rank_in_ward"], errors="raise").astype("Int32")
+    cells, cell_cov, pruned_info = _prepare_cells_layer(pack_dir, cell_scores_path, gpd, pd, np)
+    if cell_cov:
+        join_coverage["cell_scores"] = cell_cov
 
-    points = None
-    if include_points:
-        points = pd.read_parquet(pack_dir / "vlm_points.parquet")
-        points = points[["pt_id", "vlm_mm_yr", "lon", "lat"]].copy()
-        points["pt_id"] = points["pt_id"].astype("string")
-        points = gpd.GeoDataFrame(
-            points, geometry=gpd.points_from_xy(points["lon"], points["lat"]), crs="EPSG:4326"
-        )[["pt_id", "vlm_mm_yr", "geometry"]]
-        points["vlm_mm_yr"] = points["vlm_mm_yr"].astype("float64")
+    points = _prepare_points_layer(pack_dir, gpd, pd) if include_points else None
 
     buildings = None
     if include_buildings:
-        buildings = gpd.read_parquet(pack_dir / "buildings.parquet")
-        buildings = buildings[["bldg_id", "geometry"]].copy()
-        buildings["bldg_id"] = buildings["bldg_id"].astype("string")
-        buildings["vlm_mm_yr"] = pd.Series([np.nan] * len(buildings), dtype="float64")
-        buildings["beta_ratio_horizon"] = pd.Series([None] * len(buildings), dtype="string")
-        buildings["beta_class"] = pd.Series([None] * len(buildings), dtype="string")
-        buildings["sparse"] = pd.Series([pd.NA] * len(buildings), dtype="boolean")
-        building_metrics = _load_building_metrics(building_metrics_path, pd)
-        if building_metrics is not None:
-            buildings, join_coverage["building_metrics"] = _join_metrics(
-                buildings, building_metrics, "bldg_id"
-            )
-            buildings["vlm_mm_yr"] = pd.to_numeric(buildings["vlm_mm_yr"], errors="raise").astype("float64")
-            for column in ("beta_ratio_horizon", "beta_class"):
-                buildings[column] = buildings[column].astype("string")
-            buildings["sparse"] = buildings["sparse"].astype("boolean")
+        buildings, bldg_cov = _prepare_buildings_layer(pack_dir, building_metrics_path, gpd, pd, np)
+        if bldg_cov:
+            join_coverage["building_metrics"] = bldg_cov
 
-    layers = [
-        ("wards", wards, 0, 12, "public"),
-        ("cells", cells, 8, 14, "public"),
-    ]
+    layers = [("wards", wards, 0, 12, "public"), ("cells", cells, 8, 14, "public")]
     if points is not None:
         layers.append(("points", points, 10, 15, "public"))
     if buildings is not None:
         layers.append(("buildings", buildings, 13, 16, "authority"))
+
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    manifest_files = []
     with tempfile.TemporaryDirectory(prefix=f".{output_dir.name}-", dir=output_dir.parent) as temp:
         staging = Path(temp)
-        for layer_name, frame, min_zoom, max_zoom, access in layers:
-            folder = staging / access
-            folder.mkdir(parents=True, exist_ok=True)
-            tile_path = folder / f"{city}-{layer_name}-{version}.pmtiles"
-            LOG.info("Building %s (%s features), zoom %s-%s", layer_name, len(frame), min_zoom, max_zoom)
-            pyogrio.write_dataframe(
-                frame,
-                tile_path,
-                driver="PMTiles",
-                layer=layer_name,
-                dataset_options={
-                    "MINZOOM": str(min_zoom),
-                    "MAXZOOM": str(max_zoom),
-                    "NAME": f"{city.title()} {layer_name} {version}",
-                    "DESCRIPTION": "C5 geometry candidate; metric joins pending",
-                    "TYPE": "overlay",
-                },
-                layer_options={"NAME": layer_name, "MINZOOM": str(min_zoom), "MAXZOOM": str(max_zoom)},
-            )
-            manifest_files.append({
-                "layer": layer_name,
-                "file": f"{access}/{tile_path.name}",
-                "minzoom": min_zoom,
-                "maxzoom": max_zoom,
-                "features": len(frame),
-                "bytes": tile_path.stat().st_size,
-                "sha256": _sha256_file(tile_path),
-            })
+        manifest_files = _write_pmtiles_layers(staging, layers, city, version, pyogrio)
         manifest = {
             "contract": "C5@1.0",
             "city": city,
@@ -371,14 +406,7 @@ def build_pmtiles(
                 layer for layer, included in (("points", include_points), ("buildings", include_buildings))
                 if not included
             ],
-            "pruned_features": {
-                "cells": {
-                    "reason": "projected polygon area below 1 square metre; these degenerate slivers are dropped by PMTiles quantization",
-                    "source_count": source_cell_count,
-                    "pruned_count": len(pruned_cell_ids),
-                    "pruned_ids": pruned_cell_ids,
-                }
-            },
+            "pruned_features": {"cells": pruned_info},
             "distribution_status": "internal candidate; public deployment and app integration are not complete",
             "files": manifest_files,
         }
@@ -387,11 +415,13 @@ def build_pmtiles(
         )
         staging.replace(output_dir)
     return manifest
+    return manifest
 
 
 def _sha256_file(path: Path) -> str:
+    safe_path = _safe_file_path(path)
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    with safe_path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()

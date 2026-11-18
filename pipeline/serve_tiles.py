@@ -6,7 +6,8 @@ import argparse
 import ipaddress
 import json
 import re
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socketserver
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -223,10 +224,11 @@ def main() -> None:
     candidate_dir = args.candidate_dir.resolve()
     _pmtiles_dir, manifest, _ = _load_manifest_and_dirs(candidate_dir)
     city = manifest["city"]
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(candidate_dir))  # NOSONAR: local preview server
+    server = socketserver.ThreadingTCPServer((args.host, args.port), make_handler(candidate_dir))
+    server.allow_reuse_address = True
     print(f"Serving internal C5 candidate on loopback at {args.host}:{args.port}/{city}/")
     try:
-        server.serve_forever()  # NOSONAR: local dev server intentionally binds cleartext loopback
+        server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:

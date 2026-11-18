@@ -10,6 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+# Allowed CORS origins for the internal preview server (localhost only).
+_LOCALHOST_RE = re.compile(
+    r"^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$"
+)
+
 
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
@@ -62,7 +67,10 @@ def make_handler(candidate_dir: Path):
 
         def _send_common(self, status: int, size: int = 0, content_type: str = "application/octet-stream"):
             self.send_response(status)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = self.headers.get("Origin", "")
+            if _LOCALHOST_RE.match(origin):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Range")
             self.send_header("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length")

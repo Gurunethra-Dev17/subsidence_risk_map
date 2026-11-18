@@ -150,7 +150,7 @@ def convert_incidents(input_path: Path, output_path: Path, city: str) -> dict[st
         if not any(values):
             continue
         source_count += 1
-        get = lambda name: _clean(values[indices[name]]) if indices[name] < len(values) else ""
+        get = lambda name, v=values: _clean(v[indices[name]]) if indices[name] < len(v) else ""
         if get("City").casefold() != city.casefold():
             continue
         output_rows.append(_incident_record(excel_row, city, indices, get))

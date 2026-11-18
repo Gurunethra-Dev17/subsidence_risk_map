@@ -37,7 +37,7 @@ def _metric_path(path: Path | None) -> Path | None:
 
 def _metric_table(records: Any, key: str, required: set[str], source: str, pd: Any):
     if not isinstance(records, list):
-        raise ValueError(f"{source} must contain a list of metric records")
+        raise TypeError(f"{source} must contain a list of metric records")
     frame = pd.DataFrame(records)
     missing = sorted(required - set(frame.columns))
     if missing:
@@ -54,7 +54,7 @@ def _join_metrics(frame: Any, metrics: Any, key: str) -> tuple[Any, dict[str, in
     joined = frame.merge(metrics, on=key, how="left", validate="one_to_one", indicator="_metric_match")
     matched = int(joined["_metric_match"].eq("both").sum())
     coverage = {
-        "source_rows": int(len(frame)),
+        "source_rows": len(frame),
         "matched_rows": matched,
         "unmatched_source_rows": int(len(frame) - matched),
         "unmatched_metric_rows": int((~metrics[key].isin(frame[key])).sum()),
@@ -67,7 +67,7 @@ def _load_ward_metrics(path: Path | None, city: str, pd: Any):
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("Ward summary must be a JSON object")
+        raise TypeError("Ward summary must be a JSON object")
     if payload.get("contract") != "C2@1.0":
         raise ValueError("Ward summary must declare contract C2@1.0")
     if not isinstance(payload.get("meta"), dict) or payload["meta"].get("city") != city:
@@ -80,7 +80,7 @@ def _load_cell_metrics(path: Path | None, pd: Any):
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("Cell scores must be a GeoJSON object")
+        raise TypeError("Cell scores must be a GeoJSON object")
     if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
         raise ValueError("Cell scores must be a GeoJSON FeatureCollection")
     records = [feature.get("properties", {}) for feature in payload["features"]]
@@ -96,7 +96,7 @@ def _load_cell_metrics(path: Path | None, pd: Any):
 def _load_building_metrics(path: Path | None, pd: Any):
     if path is None:
         return None
-    import pyarrow.parquet as parquet
+    from pyarrow import parquet
 
     metadata = parquet.read_metadata(path).metadata or {}
     if metadata.get(b"contract") != b"C1@1.0":

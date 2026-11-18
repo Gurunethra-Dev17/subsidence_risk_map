@@ -20,6 +20,19 @@ def pack_destination(pack_dir: Path, requested: Path | None, filename: str) -> P
     return candidate
 
 
+def output_destination(requested: Path) -> Path:
+    """Resolve a generated output path and keep it under the project ``out/`` tree."""
+    project_root = Path(__file__).resolve().parents[1]
+    output_root = (project_root / "out").resolve()
+    candidate_path = requested if requested.is_absolute() else project_root / requested
+    candidate = candidate_path.resolve()
+    try:
+        candidate.relative_to(output_root)
+    except ValueError as exc:
+        raise ValueError(f"Generated output path must stay inside {output_root}") from exc
+    return candidate
+
+
 def load_c6_config(config_path: Path) -> tuple[Path, dict[str, Any]]:
     """Load a C6 YAML config only from the project's configs directory."""
     import yaml

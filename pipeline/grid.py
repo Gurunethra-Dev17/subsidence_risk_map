@@ -199,7 +199,6 @@ def process_from_config(
     output_path: Path | None = None,
     expected_ward_count: int | None = None,
 ) -> tuple[Path, dict[str, int]]:
-) -> tuple[Path, dict[str, int]]:
     project_root, config = load_c6_config(config_path)
     pack_dir = resolve_pack_dir(project_root, config["paths"]["pack_dir"])
     destination = (pack_dir / GRID_FILENAME).resolve()

@@ -310,6 +310,79 @@ def _write_pmtiles_layers(staging: Path, layers: list, city: str, version: str, 
     return manifest_files
 
 
+def _validate_pmtiles_inputs(
+    pack_dir: Path,
+    output_dir: Path,
+    include_points: bool,
+    include_buildings: bool,
+    building_metrics_path: Path | None,
+    pyogrio: Any,
+) -> None:
+    if building_metrics_path is not None and not include_buildings:
+        raise ValueError("C1 building metrics were provided, but building tiles are omitted")
+    if "PMTiles" not in pyogrio.list_drivers():
+        raise RuntimeError("Installed GDAL/pyogrio does not provide the PMTiles vector writer")
+    required = {"wards.geojson", "grid_250m.geojson"}
+    if include_points:
+        required.add("vlm_points.parquet")
+    if include_buildings:
+        required.add("buildings.parquet")
+    missing = sorted(name for name in required if not (pack_dir / name).is_file())
+    if missing:
+        raise FileNotFoundError(f"C0 pack lacks tile inputs: {', '.join(missing)}")
+    if output_dir.exists():
+        raise FileExistsError(f"Refusing to overwrite tile output directory: {output_dir}")
+
+
+def _assemble_pmtiles_manifest(
+    city: str,
+    version: str,
+    ward_summary_path: Path | None,
+    cell_scores_path: Path | None,
+    building_metrics_path: Path | None,
+    join_coverage: dict[str, dict[str, int]],
+    include_points: bool,
+    include_buildings: bool,
+    pruned_info: dict[str, Any],
+    manifest_files: list[dict[str, Any]],
+) -> dict[str, Any]:
+    metric_fields: dict[str, list[str]] = {
+        "wards": [] if ward_summary_path else ["status", "score", "rank"],
+        "cells": [] if cell_scores_path else ["suppressed", "cell_score", "cell_rank_in_ward"],
+        "points": [],
+        "buildings": [] if building_metrics_path else ["vlm_mm_yr", "beta_ratio_horizon", "beta_class", "sparse"],
+    }
+    metric_inputs = {}
+    for name, path in (
+        ("ward_summary", ward_summary_path),
+        ("cell_scores", cell_scores_path),
+        ("building_metrics", building_metrics_path),
+    ):
+        if path is not None:
+            metric_inputs[name] = {"file": path.name, "sha256": _sha256_file(path)}
+
+    omitted = []
+    if not include_points:
+        omitted.append("points")
+    if not include_buildings:
+        omitted.append("buildings")
+
+    return {
+        "contract": "C5@1.0",
+        "city": city,
+        "version": version,
+        "kind": "geometry-only PMTiles candidate",
+        "attribution": C5_ATTRIBUTION,
+        "metric_fields_pending": metric_fields,
+        "metric_inputs": metric_inputs,
+        "join_coverage": join_coverage,
+        "omitted_layers": omitted,
+        "pruned_features": {"cells": pruned_info},
+        "distribution_status": "internal candidate; public deployment and app integration are not complete",
+        "files": manifest_files,
+    }
+
+
 def build_pmtiles(
     pack_dir: Path,
     output_dir: Path,
@@ -335,21 +408,7 @@ def build_pmtiles(
     ward_summary_path = _metric_path(ward_summary_path)
     cell_scores_path = _metric_path(cell_scores_path)
     building_metrics_path = _metric_path(building_metrics_path)
-    if building_metrics_path is not None and not include_buildings:
-        raise ValueError("C1 building metrics were provided, but building tiles are omitted")
-
-    if "PMTiles" not in pyogrio.list_drivers():
-        raise RuntimeError("Installed GDAL/pyogrio does not provide the PMTiles vector writer")
-    required = {"wards.geojson", "grid_250m.geojson"}
-    if include_points:
-        required.add("vlm_points.parquet")
-    if include_buildings:
-        required.add("buildings.parquet")
-    missing = sorted(name for name in required if not (pack_dir / name).is_file())
-    if missing:
-        raise FileNotFoundError(f"C0 pack lacks tile inputs: {', '.join(missing)}")
-    if output_dir.exists():
-        raise FileExistsError(f"Refusing to overwrite tile output directory: {output_dir}")
+    _validate_pmtiles_inputs(pack_dir, output_dir, include_points, include_buildings, building_metrics_path, pyogrio)
 
     join_coverage: dict[str, dict[str, int]] = {}
     wards, ward_cov = _prepare_wards_layer(pack_dir, ward_summary_path, city, gpd, pd, np)
@@ -378,43 +437,22 @@ def build_pmtiles(
     with tempfile.TemporaryDirectory(prefix=f".{output_dir.name}-", dir=output_dir.parent) as temp:
         staging = Path(temp)
         manifest_files = _write_pmtiles_layers(staging, layers, city, version, pyogrio)
-        manifest = {
-            "contract": "C5@1.0",
-            "city": city,
-            "version": version,
-            "kind": "geometry-only PMTiles candidate",
-            "attribution": C5_ATTRIBUTION,
-            "metric_fields_pending": {
-                "wards": [] if ward_summary_path else ["status", "score", "rank"],
-                "cells": [] if cell_scores_path else ["suppressed", "cell_score", "cell_rank_in_ward"],
-                "points": [],
-                "buildings": [] if building_metrics_path else [
-                    "vlm_mm_yr", "beta_ratio_horizon", "beta_class", "sparse"
-                ],
-            },
-            "metric_inputs": {
-                name: {"file": path.name, "sha256": _sha256_file(path)}
-                for name, path in (
-                    ("ward_summary", ward_summary_path),
-                    ("cell_scores", cell_scores_path),
-                    ("building_metrics", building_metrics_path),
-                )
-                if path is not None
-            },
-            "join_coverage": join_coverage,
-            "omitted_layers": [
-                layer for layer, included in (("points", include_points), ("buildings", include_buildings))
-                if not included
-            ],
-            "pruned_features": {"cells": pruned_info},
-            "distribution_status": "internal candidate; public deployment and app integration are not complete",
-            "files": manifest_files,
-        }
+        manifest = _assemble_pmtiles_manifest(
+            city,
+            version,
+            ward_summary_path,
+            cell_scores_path,
+            building_metrics_path,
+            join_coverage,
+            include_points,
+            include_buildings,
+            pruned_info,
+            manifest_files,
+        )
         (staging / "TILES_CANDIDATE.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         staging.replace(output_dir)
-    return manifest
     return manifest
 
 

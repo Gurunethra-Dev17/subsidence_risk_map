@@ -159,7 +159,9 @@ def build_ward_fallback(input_path: Path, output_dir: Path, city: str, version: 
         raw = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         # mtime=0 makes repeated runs byte-for-byte stable.
         compressed = gzip.compress(raw, mtime=0)
-        destination = output_dir / f"{ward_id}.json"
+        destination = (output_dir / f"{ward_id}.json").resolve()
+        if not destination.is_relative_to(output_dir.resolve()):
+            raise ValueError(f"Ward tile path escapes output directory: {destination}")
         destination.write_bytes(compressed)
         records.append({
             "ward_id": ward_id,

@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from pipeline.paths import load_c6_config
+
 LOG = logging.getLogger("pipeline.risk")
 GEOGRAPHIC_CRS = "EPSG:4326"
 
@@ -93,17 +95,12 @@ def convert_risk_layer(
 
 
 def main() -> None:
-    import yaml
-
     parser = argparse.ArgumentParser(description="Convert Virginia Tech risk polygons to C0 GeoParquet fields.")
     parser.add_argument("--config", type=Path, required=True, help="City C6 YAML config")
     parser.add_argument("--input", type=Path, required=True, help="Risk shapefile")
     parser.add_argument("--output", type=Path, required=True, help="Output GeoParquet path")
     args = parser.parse_args()
-    with args.config.open("r", encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if config.get("contract") != "C6@1.0":
-        raise ValueError(f"Expected a C6@1.0 city config: {args.config}")
+    _project_root, config = load_c6_config(args.config)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     stats = convert_risk_layer(input_path=args.input, output_path=args.output, bbox=config["bbox"])
     LOG.info("Wrote %s", args.output)

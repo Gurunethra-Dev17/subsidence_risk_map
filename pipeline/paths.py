@@ -13,10 +13,8 @@ def pack_destination(pack_dir: Path, requested: Path | None, filename: str) -> P
     if not candidate_path.is_absolute():
         candidate_path = root / candidate_path
     candidate = candidate_path.resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"Output path must stay inside configured pack directory: {root}") from exc
+    if not candidate.is_relative_to(root):
+        raise ValueError(f"Output path must stay inside configured pack directory: {root}")
     return candidate
 
 
@@ -26,10 +24,8 @@ def output_destination(requested: Path) -> Path:
     output_root = (project_root / "out").resolve()
     candidate_path = requested if requested.is_absolute() else project_root / requested
     candidate = candidate_path.resolve()
-    try:
-        candidate.relative_to(output_root)
-    except ValueError as exc:
-        raise ValueError(f"Generated output path must stay inside {output_root}") from exc
+    if not candidate.is_relative_to(output_root):
+        raise ValueError(f"Generated output path must stay inside {output_root}")
     return candidate
 
 

@@ -14,6 +14,8 @@ from typing import Any
 
 from defusedxml import ElementTree
 
+from pipeline.paths import load_c6_config
+
 LOG = logging.getLogger("pipeline.vt")
 XLSX_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 VLM_FILENAME = "vlm_points.parquet"
@@ -202,18 +204,13 @@ def _incident_record(excel_row: int, city: str, indices: dict[str, int], get: An
 
 
 def main() -> None:
-    import yaml
-
     parser = argparse.ArgumentParser(description="Prepare Virginia Tech v2 C0 VLM and incident tables.")
     parser.add_argument("--config", type=Path, required=True, help="City C6 YAML config")
     parser.add_argument("--vlm", type=Path, required=True, help="Source VLM CSV")
     parser.add_argument("--incidents", type=Path, required=True, help="Source incident XLSX")
     parser.add_argument("--output-dir", type=Path, required=True, help="Working output directory under data/raw")
     args = parser.parse_args()
-    with args.config.open("r", encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if config.get("contract") != "C6@1.0":
-        raise ValueError(f"Expected a C6@1.0 city config: {args.config}")
+    _project_root, config = load_c6_config(args.config)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     vlm = convert_vlm(args.vlm, args.output_dir / "vlm_points_delhi.parquet", config["city"])
     incidents = convert_incidents(args.incidents, args.output_dir / "collapse_incidents_delhi.csv", config["city"])

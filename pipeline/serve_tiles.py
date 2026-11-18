@@ -24,11 +24,10 @@ def _manifest_tile_path(candidate_dir: Path, filename: str) -> tuple[str, Path]:
     relative = Path(filename)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("Tile manifest paths must be relative")
-    target = (candidate_dir / relative).resolve()
-    try:
-        target.relative_to(candidate_dir)
-    except ValueError as exc:
-        raise ValueError("Tile manifest path escapes candidate directory") from exc
+    candidate_root = candidate_dir.resolve()
+    target = (candidate_root / relative).resolve()
+    if not target.is_relative_to(candidate_root):
+        raise ValueError("Tile manifest path escapes candidate directory")
     if not target.is_file():
         raise FileNotFoundError(target)
     if relative.parts and relative.parts[0] == "authority":
@@ -47,6 +46,11 @@ def make_handler(candidate_dir: Path):
     if not (pmtiles_dir / "TILES_CANDIDATE.json").is_file() and candidate_manifest.is_file():
         pmtiles_dir = candidate_dir
     fallback_dir = candidate_dir / "geojson"
+    geojson_tiles: dict[str, Path] = {}
+    if fallback_dir.is_dir():
+        for entry in fallback_dir.iterdir():
+            if entry.is_file() and entry.name.endswith(".json"):
+                geojson_tiles[entry.name] = entry.resolve()
     tile_manifest_path = pmtiles_dir / "TILES_CANDIDATE.json"
     if not tile_manifest_path.is_file():
         raise FileNotFoundError(tile_manifest_path)
@@ -105,15 +109,9 @@ def make_handler(candidate_dir: Path):
                 len(parts) == 3
                 and parts[0] == city
                 and parts[1] == "geojson"
-                and parts[2].removesuffix(".json").isdigit()
-                and parts[2].endswith(".json")
+                and parts[2] in geojson_tiles
             ):
-                target = (fallback_dir / parts[2]).resolve()
-                try:
-                    target.relative_to(fallback_dir.resolve())
-                except ValueError:
-                    return None, None, None
-                return target, "application/geo+json", "gzip"
+                return geojson_tiles[parts[2]], "application/geo+json", "gzip"
             return None, None, None
 
         def _serve(self, *, head_only: bool):

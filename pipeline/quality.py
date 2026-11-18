@@ -106,7 +106,7 @@ def _geo_findings(pack_dir: Path, expected_wards: int | None, errors: list[str])
             continue
         try:
             frame = _load_geo(path)
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             errors.append(f"{filename}: cannot read geospatial layer ({exc})")
             continue
         _geo_structure_findings(filename, frame, errors)
@@ -194,7 +194,7 @@ def _table_findings(pack_dir: Path, errors: list[str]) -> None:
             continue
         try:
             table = pd.read_csv(path) if filename == INCIDENTS_FILE else pd.read_parquet(path)
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             errors.append(f"{filename}: cannot read table ({exc})")
             continue
         missing = sorted(REQUIRED_COLUMNS[filename] - set(table.columns))

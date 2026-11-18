@@ -6,12 +6,11 @@ import argparse
 import csv
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "contracts" / "schemas" / "pack_manifest.schema.json"
@@ -53,7 +52,7 @@ def row_count(path: Path) -> int:
 
     if suffix == ".parquet":
         try:
-            import pyarrow.parquet as parquet
+            from pyarrow import parquet
         except ImportError as exc:
             raise RuntimeError("Counting Parquet rows requires the optional pyarrow dependency") from exc
         return parquet.ParquetFile(path).metadata.num_rows
@@ -92,7 +91,7 @@ def build_manifest(
         "contract": "C0@1.0",
         "pack_version": pack_version,
         "created_utc": created_utc
-        or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        or datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "city": city,
         "crs_storage": "EPSG:4326",
         "files": files,

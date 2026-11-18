@@ -11,12 +11,11 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from pipeline.paths import load_c6_config
-
 
 LOG = logging.getLogger("pipeline.overture")
 RELEASE_PATTERN = re.compile(r"\b(20\d{2}-\d{2}-\d{2}\.\d+)\b")
@@ -24,7 +23,7 @@ OUTPUT_DIRECTORY_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def split_bbox(bbox: list[float], tile_degrees: float) -> list[tuple[int, int, tuple[float, float, float, float]]]:

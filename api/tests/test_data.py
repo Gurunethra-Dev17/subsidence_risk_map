@@ -40,6 +40,124 @@ def test_loads_c2_ward_summary(data_store: APIData) -> None:
     assert len(summary["wards"]) == 3
 
 
+def test_mock_artifact_defaults_require_explicit_dev_mode(monkeypatch) -> None:
+    monkeypatch.delenv("API_ENV", raising=False)
+    for key in (
+        "API_WARD_SUMMARY_PATH", "API_CELL_SCORES_PATH",
+        "API_BUILDING_METRICS_PATH", "API_VALIDATION_SUMMARY_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    paths = DataPaths()
+
+    assert paths.ward_summary is None
+    assert paths.cell_scores is None
+    assert paths.building_metrics is None
+    assert paths.validation_summary is None
+    with pytest.raises(FileNotFoundError):
+        APIData(paths).load_ward_summary()
+
+
+@pytest.mark.parametrize("api_env", ["production", "staging", ""])
+def test_non_dev_environment_never_uses_implicit_mock_c2(monkeypatch, api_env: str) -> None:
+    monkeypatch.setenv("API_ENV", api_env)
+    monkeypatch.delenv("API_WARD_SUMMARY_PATH", raising=False)
+
+    assert DataPaths().ward_summary is None
+
+
+def test_explicit_dev_allows_implicit_mock_artifacts(monkeypatch) -> None:
+    monkeypatch.setenv("API_ENV", "dev")
+    monkeypatch.delenv("API_WARD_SUMMARY_PATH", raising=False)
+
+    store = APIData()
+
+    assert store.paths.ward_summary == MOCKS / "ward_summary.json"
+    assert store.load_ward_summary()["contract"] == "C2@1.0"
+
+
+@pytest.mark.parametrize("api_env", ["dev", "production"])
+def test_explicit_c2_path_is_used_in_dev_and_production(
+    monkeypatch, tmp_path: Path, api_env: str
+) -> None:
+    configured_summary = tmp_path / "configured-summary.json"
+    shutil.copyfile(MOCKS / "ward_summary.json", configured_summary)
+    monkeypatch.setenv("API_ENV", api_env)
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", str(configured_summary))
+
+    store = APIData()
+
+    assert store.paths.ward_summary == configured_summary
+    assert store.load_ward_summary()["contract"] == "C2@1.0"
+
+
+def test_explicit_relative_nonmock_c2_path_remains_usable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    configured_summary = tmp_path / "relative-summary.json"
+    shutil.copyfile(MOCKS / "ward_summary.json", configured_summary)
+    relative_path = configured_summary.relative_to(Path.cwd())
+    monkeypatch.setenv("API_ENV", "production")
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", str(relative_path))
+
+    store = APIData()
+
+    assert store.paths.ward_summary == relative_path
+    assert store.load_ward_summary()["contract"] == "C2@1.0"
+
+
+@pytest.mark.parametrize("api_env", ["dev", "production"])
+def test_configured_missing_c2_path_fails_without_mock_fallback(
+    monkeypatch, tmp_path: Path, api_env: str
+) -> None:
+    configured_summary = tmp_path / "missing-summary.json"
+    monkeypatch.setenv("API_ENV", api_env)
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", str(configured_summary))
+
+    store = APIData()
+
+    assert store.paths.ward_summary == configured_summary
+    with pytest.raises(FileNotFoundError):
+        store.load_ward_summary()
+
+
+def test_empty_configured_c2_path_fails_closed_outside_dev(monkeypatch) -> None:
+    monkeypatch.setenv("API_ENV", "production")
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", "")
+
+    paths = DataPaths()
+
+    assert paths.ward_summary is None
+    with pytest.raises(FileNotFoundError):
+        APIData(paths).load_ward_summary()
+
+
+def test_relative_or_symlink_path_cannot_enable_mock_data_in_production(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("API_ENV", "production")
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", "contracts/mock/ward_summary.json")
+    assert DataPaths().ward_summary is None
+
+    alias = tmp_path / "ward-summary-alias.json"
+    try:
+        alias.symlink_to(MOCKS / "ward_summary.json")
+    except OSError:
+        # Preserve coverage on Windows hosts where creating symlinks needs a
+        # privilege: simulate Path.resolve following that alias to the mock.
+        alias.write_text("synthetic alias", encoding="utf-8")
+        original_resolve = Path.resolve
+
+        def resolve_alias(path: Path, *args, **kwargs) -> Path:
+            if path == alias:
+                return (MOCKS / "ward_summary.json").resolve()
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", resolve_alias)
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", str(alias))
+    assert DataPaths().ward_summary is None
+
+
 @pytest.mark.parametrize(
     ("status", "ward_ids"),
     [

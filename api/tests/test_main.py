@@ -43,6 +43,64 @@ def test_health_preserves_body_and_adds_etag(client: TestClient) -> None:
     assert_etag_matches(response)
 
 
+def test_unconfigured_production_fails_closed_for_c2_routes_but_keeps_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_ENV", "production")
+    for name in (
+        "API_WARD_SUMMARY_PATH", "API_CELL_SCORES_PATH",
+        "API_BUILDING_METRICS_PATH", "API_VALIDATION_SUMMARY_PATH",
+        "AUTHORITY_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(api_main, "data_store", APIData())
+    client = TestClient(api_main.app, raise_server_exceptions=False)
+
+    assert client.get("/api/v1/health").status_code == 200
+    for path in (
+        "/api/v1/meta",
+        "/api/v1/wards",
+        "/api/v1/wards/ward-001",
+        "/api/v1/wards/ward-001/cells",
+        "/api/v1/wards/ward-001/brief.pdf",
+        "/api/v1/validation",
+    ):
+        response = client.get(path)
+        assert response.status_code == 500
+        assert response.json() == {
+            "error": {
+                "code": "internal",
+                "message": "Unexpected failure",
+                "details": {},
+            }
+        }
+
+    # Authentication still gates building data before missing artifact paths matter.
+    assert client.get("/api/v1/buildings", params={"bbox": "77,28,78,29"}).status_code == 401
+
+
+def test_cell_and_pdf_endpoints_do_not_use_implicit_mock_cells(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured_summary = tmp_path / "ward-summary.json"
+    shutil.copyfile(MOCKS / "ward_summary.json", configured_summary)
+    monkeypatch.setenv("API_ENV", "production")
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", str(configured_summary))
+    monkeypatch.delenv("API_CELL_SCORES_PATH", raising=False)
+    store = APIData()
+    assert store.get_ward("ward-001") is not None
+    monkeypatch.setattr(api_main, "data_store", store)
+    client = TestClient(api_main.app, raise_server_exceptions=False)
+
+    for path in (
+        "/api/v1/wards/ward-001/cells",
+        "/api/v1/wards/ward-001/brief.pdf",
+    ):
+        response = client.get(path)
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "internal"
+
+
 def test_list_wards_filters_sorts_paginates_and_sets_cache_headers(
     client: TestClient,
 ) -> None:
@@ -157,6 +215,7 @@ def test_generated_openapi_documents_c4_status_codes_and_response_media(
     paths = schema["paths"]
 
     expected_statuses = {
+        "/api/v1/meta": {"200", "429", "500"},
         "/api/v1/health": {"200", "429", "500"},
         "/api/v1/wards": {"200", "400", "429", "500"},
         "/api/v1/wards/{ward_id}": {"200", "404", "429", "500"},
@@ -175,16 +234,5 @@ def test_generated_openapi_documents_c4_status_codes_and_response_media(
     brief_response = paths["/api/v1/wards/{ward_id}/brief.pdf"]["get"]["responses"]["200"]
     assert set(brief_response["content"]) == {"application/pdf"}
     assert brief_response["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
-    assert "/api/v1/meta" not in paths
+    assert "/api/v1/meta" in paths
     assert "/api/v1/buildings" in paths
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["/api/v1/meta"],
-)
-def test_out_of_scope_routes_are_not_exposed(client: TestClient, path: str) -> None:
-    response = client.get(path)
-
-    assert response.status_code == 404
-    assert response.json()["error"]["code"] == "not_found"

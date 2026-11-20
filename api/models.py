@@ -22,6 +22,36 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class MetaWeights(BaseModel):
+    i1: float
+    i2: float
+    i3: float
+    i4: float | None
+
+
+class ContractVersions(BaseModel):
+    C0: str
+    C1: str
+    C2: str
+    C3: str
+    C4: str
+    C5: str
+    C6: str
+
+
+class MetaResponse(BaseModel):
+    city: str
+    data_vintage: str
+    generated_utc: str = Field(json_schema_extra={"format": "date-time"})
+    engine_version: str
+    params: dict[str, Any]
+    weights: MetaWeights
+    n_wards: int
+    n_ranked: int
+    default_mode: Literal["public", "authority"]
+    contract_versions: ContractVersions
+
+
 class Ward(BaseModel):
     model_config = ConfigDict(extra="allow")
 

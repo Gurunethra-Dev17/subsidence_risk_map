@@ -37,9 +37,23 @@ _BUILDING_PROPERTIES = (
 )
 
 
-def _configured_path(env_name: str, default: Path) -> Path:
+def _configured_path(env_name: str, mock_default: Path) -> Path | None:
+    """Use mock artifacts only for explicit dev mode; never infer a fallback."""
     configured = os.getenv(env_name)
-    return Path(configured).expanduser() if configured else default
+    is_dev = os.getenv("API_ENV", "").casefold() == "dev"
+    if configured is None:
+        return mock_default if is_dev else None
+    if not configured.strip():
+        return None
+
+    path = Path(configured).expanduser()
+    if not is_dev:
+        try:
+            if path.resolve().is_relative_to(_MOCK_ROOT.resolve()):
+                return None
+        except (OSError, RuntimeError):
+            pass
+    return path
 
 
 def _configured_optional_path(env_name: str) -> Path | None:
@@ -51,22 +65,22 @@ def _configured_optional_path(env_name: str) -> Path | None:
 class DataPaths:
     """Configurable locations for the API's contract artefacts."""
 
-    ward_summary: Path = field(
+    ward_summary: Path | None = field(
         default_factory=lambda: _configured_path(
             "API_WARD_SUMMARY_PATH", _MOCK_ROOT / "ward_summary.json"
         )
     )
-    cell_scores: Path = field(
+    cell_scores: Path | None = field(
         default_factory=lambda: _configured_path(
             "API_CELL_SCORES_PATH", _MOCK_ROOT / "cell_scores.geojson"
         )
     )
-    building_metrics: Path = field(
+    building_metrics: Path | None = field(
         default_factory=lambda: _configured_path(
             "API_BUILDING_METRICS_PATH", _MOCK_ROOT / "building_metrics.parquet"
         )
     )
-    validation_summary: Path = field(
+    validation_summary: Path | None = field(
         default_factory=lambda: _configured_path(
             "API_VALIDATION_SUMMARY_PATH", _MOCK_ROOT / "validation_summary.json"
         )
@@ -85,8 +99,10 @@ def _load_json_cached(path: str, mtime_ns: int, size: int) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def load_json(path: str | Path) -> Any:
+def load_json(path: str | Path | None) -> Any:
     """Load JSON, reusing the parsed value until the source file changes."""
+    if path is None:
+        raise FileNotFoundError("API artifact path is not configured")
     source = Path(path).expanduser().resolve()
     stat = source.stat()
     return deepcopy(_load_json_cached(str(source), stat.st_mtime_ns, stat.st_size))
@@ -240,6 +256,8 @@ class APIData:
         parsed_bbox = parse_bbox(bbox)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 0 <= limit <= 5000:
             raise ValueError("limit must be between 0 and 5000")
+        if self.paths.building_metrics is None:
+            raise FileNotFoundError("C1 building metrics path is not configured")
         source = Path(self.paths.building_metrics).expanduser().resolve()
         if not source.is_file():
             raise FileNotFoundError(f"C1 Parquet fixture not found: {source}")

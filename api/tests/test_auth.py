@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import api.main as api_main
 from api.auth import require_authority
+from api.data import APIData
 
 TEST_AUTHORITY_TOKEN = "test-only-authority-secret"
 
@@ -150,7 +151,10 @@ def test_openapi_advertises_header_without_exposing_secret(monkeypatch) -> None:
     assert TEST_AUTHORITY_TOKEN not in str(schema)
 
 
-def test_public_routes_remain_available_without_authentication() -> None:
+def test_public_routes_remain_available_without_authentication(monkeypatch) -> None:
+    monkeypatch.setenv("API_ENV", "dev")
+    monkeypatch.delenv("API_WARD_SUMMARY_PATH", raising=False)
+    monkeypatch.setattr(api_main, "data_store", APIData())
     client = TestClient(api_main.app)
 
     assert client.get("/api/v1/health").status_code == 200

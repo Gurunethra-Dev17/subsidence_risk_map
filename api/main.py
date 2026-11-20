@@ -17,8 +17,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from api.auth import require_authority
 from api.data import data_store, json_etag, parse_bbox
 from api.brief import generate_brief_pdf
+from api.metadata import build_meta_payload
 from api.models import (
     CellFeatureCollection,
+    MetaResponse,
     ErrorEnvelope,
     HealthResponse,
     ValidationSummary,
@@ -184,6 +186,26 @@ async def unexpected_exception_handler(
 async def health() -> JSONResponse:
     """Return liveness status and the running API version tag."""
     return json_response({"status": "ok", "version": settings.api_version})
+
+
+@app.get(
+    f"{API_PREFIX}/meta",
+    tags=["meta"],
+    response_class=JSONResponse,
+    response_model=MetaResponse,
+    responses={
+        200: {"headers": _success_headers()},
+        **_error_responses(429, 500),
+    },
+)
+async def get_meta() -> JSONResponse:
+    """Return validated C2 metadata with the selected C6 default mode."""
+    try:
+        payload = build_meta_payload(data_store.load_ward_summary())
+        body = MetaResponse(**payload).model_dump(mode="json")
+    except Exception:
+        return error_response(500, "internal", "Unexpected failure")
+    return json_response(body)
 
 
 WARD_CACHE_CONTROL = "public, max-age=300"

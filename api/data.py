@@ -42,6 +42,11 @@ def _configured_path(env_name: str, default: Path) -> Path:
     return Path(configured).expanduser() if configured else default
 
 
+def _configured_optional_path(env_name: str) -> Path | None:
+    configured = os.getenv(env_name)
+    return Path(configured).expanduser() if configured else None
+
+
 @dataclass(frozen=True)
 class DataPaths:
     """Configurable locations for the API's contract artefacts."""
@@ -64,6 +69,11 @@ class DataPaths:
     validation_summary: Path = field(
         default_factory=lambda: _configured_path(
             "API_VALIDATION_SUMMARY_PATH", _MOCK_ROOT / "validation_summary.json"
+        )
+    )
+    buildings_geometry: Path | None = field(
+        default_factory=lambda: _configured_optional_path(
+            "API_BUILDINGS_GEOMETRY_PATH"
         )
     )
 
@@ -216,11 +226,12 @@ class APIData:
         bbox: str | Sequence[float] | None = None,
         limit: int = 500,
     ) -> dict[str, Any]:
-        """Query C1 Parquet through DuckDB and return the C4 GeoJSON shape.
+        """Query C1 metrics and optional C0 geometry into the C4 GeoJSON shape.
 
-        Bounding-box filtering is available only when the Parquet source has
-        explicit longitude and latitude columns. The frozen C1 schema itself
-        does not define coordinates or geometry; no location is inferred.
+        When C0 geometry is configured, C0 is the left side of the join so
+        buildings without C1 metrics remain present with null metric values.
+        Bbox filtering then uses true polygon intersection in EPSG:4326.
+        Without C0, the original C1-only coordinate filtering remains active.
         """
         parsed_bbox = parse_bbox(bbox)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 0 <= limit <= 5000:
@@ -229,61 +240,149 @@ class APIData:
         if not source.is_file():
             raise FileNotFoundError(f"C1 Parquet fixture not found: {source}")
 
+        geometry_source = None
+        if self.paths.buildings_geometry is not None:
+            geometry_source = Path(self.paths.buildings_geometry).expanduser().resolve()
+            if not geometry_source.is_file():
+                raise FileNotFoundError(
+                    f"C0 building geometry Parquet not found: {geometry_source}"
+                )
+
         try:
             import duckdb
         except ImportError as exc:  # pragma: no cover - depends on API install extra
             raise RuntimeError("DuckDB is required to read C1 Parquet data") from exc
 
         with duckdb.connect(database=":memory:") as connection:
-            description = connection.execute(
-                "DESCRIBE SELECT * FROM read_parquet(?)", [str(source)]
-            ).fetchall()
-            columns = {row[0].casefold() for row in description}
-            coordinate_columns = next(
-                (
-                    pair for pair in (("lon", "lat"), ("longitude", "latitude"))
-                    if set(pair).issubset(columns)
-                ),
-                None,
-            )
-            if parsed_bbox is not None and coordinate_columns is None:
-                raise SpatialDataUnavailableError(
-                    "C1 Parquet has no explicit longitude/latitude columns; "
-                    "bbox filtering requires location data joined by bldg_id"
+            if geometry_source is not None:
+                connection.execute("LOAD spatial")
+                c0_description = connection.execute(
+                    "DESCRIBE SELECT * FROM read_parquet(?)", [str(geometry_source)]
+                ).fetchall()
+                c0_columns = {row[0].casefold() for row in c0_description}
+                required_c0 = {"bldg_id", "ward_id", "cell_id", "geometry"}
+                missing_c0 = required_c0 - c0_columns
+                if missing_c0:
+                    raise ValueError(
+                        "C0 Parquet is missing columns: "
+                        f"{', '.join(sorted(missing_c0))}"
+                    )
+                geometry_type = next(
+                    row[1] for row in c0_description if row[0].casefold() == "geometry"
+                ).upper()
+                if geometry_type.startswith("GEOMETRY"):
+                    geometry_expression = 'c0."geometry"'
+                elif geometry_type == "BLOB":
+                    geometry_expression = 'ST_GeomFromWKB(c0."geometry")'
+                else:
+                    raise ValueError(
+                        "C0 geometry column must be DuckDB GEOMETRY or WKB BLOB; "
+                        f"got {geometry_type}"
+                    )
+                c1_description = connection.execute(
+                    "DESCRIBE SELECT * FROM read_parquet(?)", [str(source)]
+                ).fetchall()
+                c1_columns = {row[0].casefold() for row in c1_description}
+                missing_c1 = set(_BUILDING_PROPERTIES) - c1_columns
+                if missing_c1:
+                    raise ValueError(
+                        "C1 Parquet is missing columns: "
+                        f"{', '.join(sorted(missing_c1))}"
+                    )
+
+                query = (
+                    'SELECT c0."bldg_id" AS bldg_id, '
+                    + ", ".join(
+                        f'c1."{column}" AS "{column}"'
+                        for column in _BUILDING_PROPERTIES[1:]
+                    )
+                    + f", ST_AsGeoJSON({geometry_expression}) AS __geometry "
+                    + "FROM read_parquet(?) AS c0 "
+                    + 'LEFT JOIN read_parquet(?) AS c1 ON c0."bldg_id" = c1."bldg_id"'
                 )
+                parameters: list[Any] = [str(geometry_source), str(source)]
+                predicates: list[str] = []
+                if ward_id is not None:
+                    predicates.append('c0."ward_id" = ?')
+                    parameters.append(ward_id)
+                if parsed_bbox is not None:
+                    predicates.append(
+                        "ST_Intersects("
+                        f"{geometry_expression}, "
+                        "ST_MakeEnvelope(?, ?, ?, ?))"
+                    )
+                    parameters.extend(parsed_bbox)
+                if predicates:
+                    query += " WHERE " + " AND ".join(predicates)
+                query += " LIMIT ?"
+                parameters.append(limit)
+                rows = connection.execute(query, parameters).fetchall()
+                result_columns = [column[0] for column in connection.description]
+            else:
+                description = connection.execute(
+                    "DESCRIBE SELECT * FROM read_parquet(?)", [str(source)]
+                ).fetchall()
+                columns = {row[0].casefold() for row in description}
+                coordinate_columns = next(
+                    (
+                        pair for pair in (("lon", "lat"), ("longitude", "latitude"))
+                        if set(pair).issubset(columns)
+                    ),
+                    None,
+                )
+                if parsed_bbox is not None and coordinate_columns is None:
+                    raise SpatialDataUnavailableError(
+                        "C1 Parquet has no explicit longitude/latitude columns; "
+                        "bbox filtering requires location data joined by bldg_id"
+                    )
 
-            missing = set(_BUILDING_PROPERTIES) - columns
-            if missing:
-                raise ValueError(f"C1 Parquet is missing columns: {', '.join(sorted(missing))}")
+                missing = set(_BUILDING_PROPERTIES) - columns
+                if missing:
+                    raise ValueError(
+                        f"C1 Parquet is missing columns: {', '.join(sorted(missing))}"
+                    )
 
-            selected = list(_BUILDING_PROPERTIES)
-            if coordinate_columns:
-                lon_column, lat_column = coordinate_columns
-                selected.extend((f'"{lon_column}" AS __lon', f'"{lat_column}" AS __lat'))
-            query = "SELECT " + ", ".join(selected) + " FROM read_parquet(?)"
-            parameters: list[Any] = [str(source)]
-            predicates: list[str] = []
-            if ward_id is not None:
-                predicates.append('"ward_id" = ?')
-                parameters.append(ward_id)
-            if parsed_bbox is not None:
-                min_lon, min_lat, max_lon, max_lat = parsed_bbox
-                lon_column, lat_column = coordinate_columns or ("", "")
-                predicates.extend((f'"{lon_column}" BETWEEN ? AND ?', f'"{lat_column}" BETWEEN ? AND ?'))
-                parameters.extend((min_lon, max_lon, min_lat, max_lat))
-            if predicates:
-                query += " WHERE " + " AND ".join(predicates)
-            query += " LIMIT ?"
-            parameters.append(limit)
-            rows = connection.execute(query, parameters).fetchall()
-            result_columns = [column[0] for column in connection.description]
+                selected = list(_BUILDING_PROPERTIES)
+                if coordinate_columns:
+                    lon_column, lat_column = coordinate_columns
+                    selected.extend(
+                        (f'"{lon_column}" AS __lon', f'"{lat_column}" AS __lat')
+                    )
+                query = "SELECT " + ", ".join(selected) + " FROM read_parquet(?)"
+                parameters = [str(source)]
+                predicates = []
+                if ward_id is not None:
+                    predicates.append('"ward_id" = ?')
+                    parameters.append(ward_id)
+                if parsed_bbox is not None:
+                    min_lon, min_lat, max_lon, max_lat = parsed_bbox
+                    lon_column, lat_column = coordinate_columns or ("", "")
+                    predicates.extend(
+                        (
+                            f'"{lon_column}" BETWEEN ? AND ?',
+                            f'"{lat_column}" BETWEEN ? AND ?',
+                        )
+                    )
+                    parameters.extend((min_lon, max_lon, min_lat, max_lat))
+                if predicates:
+                    query += " WHERE " + " AND ".join(predicates)
+                query += " LIMIT ?"
+                parameters.append(limit)
+                rows = connection.execute(query, parameters).fetchall()
+                result_columns = [column[0] for column in connection.description]
 
         features = []
         for row in rows:
             values = dict(zip(result_columns, row))
             properties = {key: values.get(key) for key in _BUILDING_PROPERTIES}
             geometry = None
-            if "__lon" in values and values["__lon"] is not None and values["__lat"] is not None:
+            if "__geometry" in values and values["__geometry"] is not None:
+                geometry = json.loads(values["__geometry"])
+            elif (
+                "__lon" in values
+                and values["__lon"] is not None
+                and values["__lat"] is not None
+            ):
                 geometry = {
                     "type": "Point",
                     "coordinates": [values["__lon"], values["__lat"]],

@@ -29,6 +29,7 @@ def data_store(tmp_path: Path) -> APIData:
             cell_scores=MOCKS / "cell_scores.geojson",
             building_metrics=tmp_path / "building_metrics.parquet",
             validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=None,
         )
     )
 
@@ -123,6 +124,7 @@ def test_suppressed_cell_metrics_are_hidden(tmp_path: Path) -> None:
             cell_scores=cells_path,
             building_metrics=PARQUET_FIXTURE,
             validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=None,
         )
     )
     properties = store.get_cells("ward-002")["features"][0]["properties"]
@@ -161,6 +163,7 @@ def test_etag_changes_when_loaded_source_changes(tmp_path: Path) -> None:
             cell_scores=MOCKS / "cell_scores.geojson",
             building_metrics=PARQUET_FIXTURE,
             validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=None,
         )
     )
     original = store.load_ward_summary()
@@ -170,10 +173,26 @@ def test_etag_changes_when_loaded_source_changes(tmp_path: Path) -> None:
     assert json_etag(store.load_ward_summary()) != original_etag
 
 
-def test_missing_parquet_fixture_is_reported(data_store: APIData) -> None:
-    assert not PARQUET_FIXTURE.exists()
+def test_missing_parquet_fixture_is_reported(tmp_path: Path) -> None:
+    missing_parquet = tmp_path / "definitely_missing.parquet"
+    store = APIData(
+        DataPaths(
+            ward_summary=MOCKS / "ward_summary.json",
+            cell_scores=MOCKS / "cell_scores.geojson",
+            building_metrics=missing_parquet,
+            validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=None,
+        )
+    )
     with pytest.raises(FileNotFoundError, match="C1 Parquet fixture not found"):
-        data_store.get_buildings()
+        store.get_buildings()
+
+
+def test_data_paths_reads_optional_c0_geometry_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    configured = Path("data") / "buildings.parquet"
+    monkeypatch.setenv("API_BUILDINGS_GEOMETRY_PATH", str(configured))
+
+    assert DataPaths().buildings_geometry == configured
 
 
 def test_duckdb_reads_temporary_c1_parquet_and_filters_bbox(tmp_path: Path) -> None:
@@ -210,6 +229,7 @@ def test_duckdb_reads_temporary_c1_parquet_and_filters_bbox(tmp_path: Path) -> N
             cell_scores=MOCKS / "cell_scores.geojson",
             building_metrics=parquet_path,
             validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=None,
         )
     )
     all_buildings = store.get_buildings()
@@ -235,12 +255,141 @@ def test_duckdb_reads_temporary_c1_parquet_and_filters_bbox(tmp_path: Path) -> N
         store.get_buildings(bbox="bad-bbox")
 
 
+@pytest.mark.parametrize("geometry_storage", ["BLOB", "GEOMETRY"])
+def test_c0_geometry_left_join_bbox_and_ward_filters(
+    tmp_path: Path, geometry_storage: str
+) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    c0_path = tmp_path / "c0_buildings.parquet"
+    c1_path = tmp_path / "c1_metrics.parquet"
+    connection = duckdb.connect(database=":memory:")
+    connection.execute("LOAD spatial")
+    connection.execute(
+        """
+        CREATE TABLE c0 (
+            bldg_id VARCHAR, ward_id VARCHAR, cell_id VARCHAR,
+            geometry {geometry_storage}
+        )
+        """.format(geometry_storage=geometry_storage)
+    )
+    geometry_value = (
+        "ST_AsWKB(ST_GeomFromText(?))"
+        if geometry_storage == "BLOB"
+        else "ST_GeomFromText(?)"
+    )
+    c0_rows = [
+        (
+            "b-poly", "ward-1", "cell-1",
+            "POLYGON ((77.00 28.60, 77.10 28.60, 77.10 28.70, 77.00 28.70, 77.00 28.60))",
+        ),
+        (
+            "b-multi", "ward-1", "cell-1",
+            "MULTIPOLYGON (((77.20 28.60, 77.21 28.60, 77.21 28.61, 77.20 28.61, 77.20 28.60)), "
+            "((77.28 28.68, 77.30 28.68, 77.30 28.70, 77.28 28.70, 77.28 28.68)))",
+        ),
+        (
+            "b-unmatched", "ward-2", "cell-2",
+            "POLYGON ((77.40 28.60, 77.41 28.60, 77.41 28.61, 77.40 28.61, 77.40 28.60))",
+        ),
+    ]
+    for bldg_id, ward_id, cell_id, wkt in c0_rows:
+        connection.execute(
+            "INSERT INTO c0 VALUES (?, ?, ?, " + geometry_value + ")",
+            [bldg_id, ward_id, cell_id, wkt],
+        )
+    connection.execute(
+        """
+        CREATE TABLE c1 (
+            bldg_id VARCHAR, ward_id VARCHAR, cell_id VARCHAR,
+            vlm_mm_yr DOUBLE, beta_ratio_horizon VARCHAR,
+            beta_class VARCHAR, sparse BOOLEAN
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO c1 VALUES
+        ('b-poly', 'ward-1', 'cell-1', -5.0, '1/500', 'inspect', false),
+        ('b-multi', 'ward-1', 'cell-1', NULL, NULL, NULL, true)
+        """
+    )
+    connection.execute(f"COPY c0 TO '{c0_path.as_posix()}' (FORMAT PARQUET)")
+    connection.execute(f"COPY c1 TO '{c1_path.as_posix()}' (FORMAT PARQUET)")
+    connection.close()
+
+    missing_geometry_store = APIData(
+        DataPaths(
+            ward_summary=MOCKS / "ward_summary.json",
+            cell_scores=MOCKS / "cell_scores.geojson",
+            building_metrics=c1_path,
+            validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=tmp_path / "missing_c0.parquet",
+        )
+    )
+    with pytest.raises(FileNotFoundError, match="C0 building geometry Parquet not found"):
+        missing_geometry_store.get_buildings()
+
+    store = APIData(
+        DataPaths(
+            ward_summary=MOCKS / "ward_summary.json",
+            cell_scores=MOCKS / "cell_scores.geojson",
+            building_metrics=c1_path,
+            validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=c0_path,
+        )
+    )
+    all_buildings = store.get_buildings(limit=10)
+    by_id = {feature["properties"]["bldg_id"]: feature for feature in all_buildings["features"]}
+
+    assert set(by_id) == {"b-poly", "b-multi", "b-unmatched"}
+    assert by_id["b-poly"]["geometry"]["type"] == "Polygon"
+    assert by_id["b-poly"]["properties"] == {
+        "bldg_id": "b-poly",
+        "vlm_mm_yr": -5.0,
+        "beta_ratio_horizon": "1/500",
+        "beta_class": "inspect",
+        "sparse": False,
+    }
+    assert by_id["b-multi"]["geometry"]["type"] == "MultiPolygon"
+    assert by_id["b-multi"]["properties"]["vlm_mm_yr"] is None
+    assert by_id["b-multi"]["properties"]["sparse"] is True
+    assert by_id["b-unmatched"]["geometry"]["type"] == "Polygon"
+    assert all(
+        by_id["b-unmatched"]["properties"][field] is None
+        for field in ("vlm_mm_yr", "beta_ratio_horizon", "beta_class", "sparse")
+    )
+
+    # This bbox cuts across the polygon edge but does not contain its centroid.
+    intersecting = store.get_buildings(bbox="77.095,28.64,77.11,28.66")
+    assert [feature["properties"]["bldg_id"] for feature in intersecting["features"]] == [
+        "b-poly"
+    ]
+    multipolygon_intersection = store.get_buildings(bbox="77.28,28.68,77.29,28.69")
+    assert [
+        feature["properties"]["bldg_id"]
+        for feature in multipolygon_intersection["features"]
+    ] == ["b-multi"]
+    ward_buildings = store.get_buildings(ward_id="ward-2")
+    assert [feature["properties"]["bldg_id"] for feature in ward_buildings["features"]] == [
+        "b-unmatched"
+    ]
+
+
 @pytest.mark.skipif(
     not PARQUET_FIXTURE.is_file() or importlib.util.find_spec("duckdb") is None,
     reason="C1 Parquet fixture and DuckDB are absent from the repository environment",
 )
-def test_reads_c1_building_parquet(data_store: APIData) -> None:
-    result = data_store.get_buildings()
+def test_reads_c1_building_parquet() -> None:
+    store = APIData(
+        DataPaths(
+            ward_summary=MOCKS / "ward_summary.json",
+            cell_scores=MOCKS / "cell_scores.geojson",
+            building_metrics=PARQUET_FIXTURE,
+            validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=None,
+        )
+    )
+    result = store.get_buildings()
     assert result["type"] == "FeatureCollection"
     assert all(set(feature["properties"]) == {
         "bldg_id", "vlm_mm_yr", "beta_ratio_horizon", "beta_class", "sparse"
@@ -251,9 +400,18 @@ def test_reads_c1_building_parquet(data_store: APIData) -> None:
     not PARQUET_FIXTURE.is_file() or importlib.util.find_spec("duckdb") is None,
     reason="C1 Parquet fixture and DuckDB are absent from the repository environment",
 )
-def test_bbox_filters_parquet_rows_when_spatial_columns_exist(data_store: APIData) -> None:
+def test_bbox_filters_parquet_rows_when_spatial_columns_exist() -> None:
+    store = APIData(
+        DataPaths(
+            ward_summary=MOCKS / "ward_summary.json",
+            cell_scores=MOCKS / "cell_scores.geojson",
+            building_metrics=PARQUET_FIXTURE,
+            validation_summary=MOCKS / "validation_summary.json",
+            buildings_geometry=None,
+        )
+    )
     try:
-        result = data_store.get_buildings(bbox="76.8,28.4,77.4,28.9")
+        result = store.get_buildings(bbox="76.8,28.4,77.4,28.9")
     except SpatialDataUnavailableError:
         pytest.skip("C1 Parquet has no coordinate columns for bbox filtering")
     assert result["type"] == "FeatureCollection"

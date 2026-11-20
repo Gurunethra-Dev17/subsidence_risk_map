@@ -11,10 +11,11 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.data import data_store, json_etag
+from api.brief import generate_brief_pdf
 from api.models import (
     CellFeatureCollection,
     ErrorEnvelope,
@@ -237,6 +238,42 @@ async def get_ward_cells(ward_id: str) -> JSONResponse:
         cells,
         cache_control=WARD_CACHE_CONTROL,
         media_type="application/geo+json",
+    )
+
+
+@app.get(
+    f"{API_PREFIX}/wards/{{ward_id}}/brief.pdf",
+    tags=["wards"],
+    response_class=Response,
+    responses={
+        200: {
+            "description": "One-page ward inspection brief PDF",
+            "headers": {
+                "Cache-Control": {
+                    "schema": {"type": "string", "const": "no-store"}
+                }
+            },
+            "content": {
+                "application/pdf": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            },
+        },
+        **_error_responses(404, 429, 500),
+    },
+)
+async def get_ward_brief(ward_id: str) -> Response:
+    """Return a public, ward-level PDF brief without persistent output files."""
+    ward = data_store.get_ward(ward_id)
+    if ward is None:
+        raise HTTPException(status_code=404, detail="Unknown ward_id")
+    cells = data_store.get_cells(ward_id)
+    c2_meta = data_store.load_ward_summary().get("meta", {})
+    pdf = generate_brief_pdf(ward, cells, c2_meta)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Cache-Control": "no-store"},
     )
 
 

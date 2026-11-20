@@ -30,7 +30,7 @@ from api.models import (
 class Settings:
     """Runtime settings read from environment variables."""
 
-    api_env: str = os.getenv("API_ENV", "dev")
+    api_env: str = os.getenv("API_ENV", "production")
     api_version: str = os.getenv("API_VERSION", "starter")
     cors_origins: tuple[str, ...] = tuple(
         origin.strip()

@@ -7,14 +7,15 @@ from dataclasses import dataclass
 
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.data import data_store, json_etag
+from api.auth import require_authority
+from api.data import data_store, json_etag, parse_bbox
 from api.brief import generate_brief_pdf
 from api.models import (
     CellFeatureCollection,
@@ -55,6 +56,16 @@ app = FastAPI(
     redoc_url=f"{API_PREFIX}/redoc",
 )
 
+
+@app.middleware("http")
+async def protected_buildings_no_store(request: Request, call_next):
+    """Prevent caches from retaining any response from the protected route."""
+    response = await call_next(request)
+    if request.url.path.rstrip("/") == f"{API_PREFIX}/buildings":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 if settings.cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -92,6 +103,7 @@ def json_response(
 def _error_responses(*status_codes: int) -> dict[int, dict]:
     descriptions = {
         400: "A query parameter is invalid.",
+        401: "An authority token is missing or invalid.",
         404: "The requested ward does not exist.",
         429: "Too many requests.",
         500: "An unexpected failure occurred.",
@@ -104,6 +116,16 @@ def _error_responses(*status_codes: int) -> dict[int, dict]:
         }
         for status_code in status_codes
     }
+
+
+def _protected_error_responses(*status_codes: int) -> dict[int, dict]:
+    """Document no-store on every error response from the protected route."""
+    responses = _error_responses(*status_codes)
+    for response in responses.values():
+        response["headers"]["Cache-Control"] = {
+            "schema": {"type": "string", "const": "no-store"}
+        }
+    return responses
 
 
 def _success_headers(*, ward_cache: bool = False) -> dict[str, dict]:
@@ -143,8 +165,11 @@ async def request_validation_exception_handler(
 async def unexpected_exception_handler(
     request: Request, exc: Exception
 ) -> JSONResponse:
-    del request, exc
-    return error_response(500, "internal", "Unexpected failure")
+    del exc
+    response = error_response(500, "internal", "Unexpected failure")
+    if request.url.path.rstrip("/") == f"{API_PREFIX}/buildings":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get(
@@ -290,6 +315,94 @@ async def get_ward_brief(ward_id: str) -> Response:
 async def get_validation() -> JSONResponse:
     """Return the configured C3 validation summary."""
     return json_response(data_store.load_validation_summary())
+
+
+_BUILDING_FEATURE_COLLECTION_SCHEMA = {
+    "type": "object",
+    "required": ["type", "features"],
+    "properties": {
+        "type": {"const": "FeatureCollection"},
+        "features": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["type", "geometry", "properties"],
+                "properties": {
+                    "type": {"const": "Feature"},
+                    "geometry": {"type": ["object", "null"]},
+                    "properties": {
+                        "type": "object",
+                        "required": [
+                            "bldg_id", "vlm_mm_yr", "beta_ratio_horizon",
+                            "beta_class", "sparse",
+                        ],
+                        "properties": {
+                            "bldg_id": {"type": "string"},
+                            "vlm_mm_yr": {"type": ["number", "null"]},
+                            "beta_ratio_horizon": {"type": ["string", "null"]},
+                            "beta_class": {
+                                "type": ["string", "null"],
+                                "enum": ["low", "watch", "inspect", None],
+                            },
+                            "sparse": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+@app.get(
+    f"{API_PREFIX}/buildings",
+    tags=["buildings"],
+    dependencies=[Depends(require_authority)],
+    response_class=JSONResponse,
+    responses={
+        200: {
+            "description": "Authority-only building metrics as a GeoJSON FeatureCollection",
+            "headers": {"Cache-Control": {"schema": {"type": "string", "const": "no-store"}}},
+            "content": {
+                "application/geo+json": {"schema": _BUILDING_FEATURE_COLLECTION_SCHEMA},
+                "application/json": {"schema": _BUILDING_FEATURE_COLLECTION_SCHEMA},
+            },
+        },
+        **_protected_error_responses(400, 401, 429, 500),
+    },
+)
+async def get_buildings(
+    bbox: str = Query(..., description="Bounding box as minLon,minLat,maxLon,maxLat."),
+    ward_id: str | None = None,
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> JSONResponse:
+    """Return authority-only building data for a validated spatial query.
+
+    The integrity check covers returned rows only; dataset-wide C0/C1 coverage
+    requires a separate integration validation.
+    """
+    try:
+        parse_bbox(bbox)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    try:
+        result = data_store.get_buildings(ward_id=ward_id, bbox=bbox, limit=limit)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Unexpected failure") from None
+
+    # The LEFT JOIN retains C0-only records with sparse=None. A non-boolean sparse
+    # value therefore signals an incomplete C1 match or invalid C1 output.
+    features = result.get("features") if isinstance(result, dict) else None
+    if not isinstance(features, list) or any(
+        not isinstance(feature, dict)
+        or not isinstance(feature.get("properties"), dict)
+        or type(feature["properties"].get("sparse")) is not bool
+        for feature in features
+    ):
+        raise HTTPException(status_code=500, detail="Unexpected failure")
+
+    return JSONResponse(content=result, media_type="application/geo+json")
 
 
 def _c4_openapi() -> dict:

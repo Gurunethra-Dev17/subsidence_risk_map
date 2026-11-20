@@ -163,6 +163,7 @@ def test_generated_openapi_documents_c4_status_codes_and_response_media(
         "/api/v1/wards/{ward_id}/cells": {"200", "404", "429", "500"},
         "/api/v1/wards/{ward_id}/brief.pdf": {"200", "404", "429", "500"},
         "/api/v1/validation": {"200", "429", "500"},
+        "/api/v1/buildings": {"200", "400", "401", "429", "500"},
     }
     for path, statuses in expected_statuses.items():
         operation = paths[path]["get"]
@@ -175,12 +176,12 @@ def test_generated_openapi_documents_c4_status_codes_and_response_media(
     assert set(brief_response["content"]) == {"application/pdf"}
     assert brief_response["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
     assert "/api/v1/meta" not in paths
-    assert "/api/v1/buildings" not in paths
+    assert "/api/v1/buildings" in paths
 
 
 @pytest.mark.parametrize(
     "path",
-    ["/api/v1/meta", "/api/v1/buildings"],
+    ["/api/v1/meta"],
 )
 def test_out_of_scope_routes_are_not_exposed(client: TestClient, path: str) -> None:
     response = client.get(path)

@@ -150,10 +150,8 @@ def test_openapi_advertises_header_without_exposing_secret(monkeypatch) -> None:
     assert TEST_AUTHORITY_TOKEN not in str(schema)
 
 
-def test_public_routes_remain_available_and_buildings_stay_unmounted() -> None:
+def test_public_routes_remain_available_without_authentication() -> None:
     client = TestClient(api_main.app)
 
     assert client.get("/api/v1/health").status_code == 200
     assert client.get("/api/v1/wards", params={"limit": 1}).status_code == 200
-    assert "/api/v1/buildings" not in client.get("/api/v1/openapi.json").json()["paths"]
-    assert client.get("/api/v1/buildings").status_code == 404

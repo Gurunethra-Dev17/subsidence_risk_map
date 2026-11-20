@@ -203,6 +203,10 @@ class APIData:
         """Load the C2 GeoJSON FeatureCollection."""
         return load_json(self.paths.cell_scores)
 
+    def load_validation_summary(self) -> dict[str, Any]:
+        """Load the C3 validation summary document."""
+        return load_json(self.paths.validation_summary)
+
     def get_cells(self, ward_id: str) -> dict[str, Any]:
         """Return a ward's cells, preserving the FeatureCollection and hiding suppressed metrics."""
         collection = self.load_cell_scores()

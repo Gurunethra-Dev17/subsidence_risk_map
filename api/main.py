@@ -5,13 +5,24 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from fastapi import FastAPI, Request
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.models import ErrorEnvelope
+from api.data import data_store, json_etag
+from api.models import (
+    CellFeatureCollection,
+    ErrorEnvelope,
+    HealthResponse,
+    ValidationSummary,
+    Ward,
+    WardPage,
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +67,51 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
     envelope = ErrorEnvelope(
         error={"code": code, "message": message, "details": {}}
     )
-    return JSONResponse(status_code=status_code, content=envelope.model_dump())
+    body = envelope.model_dump()
+    return JSONResponse(
+        status_code=status_code,
+        content=body,
+        headers={"ETag": json_etag(body)},
+    )
+
+
+def json_response(
+    body: dict,
+    *,
+    cache_control: str | None = None,
+    media_type: str = "application/json",
+) -> JSONResponse:
+    """Return a JSON response with the C4 entity tag and optional cache policy."""
+    headers = {"ETag": json_etag(body)}
+    if cache_control is not None:
+        headers["Cache-Control"] = cache_control
+    return JSONResponse(content=body, headers=headers, media_type=media_type)
+
+
+def _error_responses(*status_codes: int) -> dict[int, dict]:
+    descriptions = {
+        400: "A query parameter is invalid.",
+        404: "The requested ward does not exist.",
+        429: "Too many requests.",
+        500: "An unexpected failure occurred.",
+    }
+    return {
+        status_code: {
+            "model": ErrorEnvelope,
+            "description": descriptions[status_code],
+            "headers": {"ETag": {"schema": {"type": "string"}}},
+        }
+        for status_code in status_codes
+    }
+
+
+def _success_headers(*, ward_cache: bool = False) -> dict[str, dict]:
+    headers = {"ETag": {"schema": {"type": "string"}}}
+    if ward_cache:
+        headers["Cache-Control"] = {
+            "schema": {"type": "string", "const": WARD_CACHE_CONTROL}
+        }
+    return headers
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -65,7 +120,7 @@ async def http_exception_handler(
 ) -> JSONResponse:
     del request
     if exc.status_code == 404:
-        return error_response(404, "not_found", "Resource not found")
+        return error_response(404, "not_found", str(exc.detail))
     if exc.status_code == 400:
         return error_response(400, "invalid_param", str(exc.detail))
     if exc.status_code == 401:
@@ -88,10 +143,135 @@ async def unexpected_exception_handler(
     request: Request, exc: Exception
 ) -> JSONResponse:
     del request, exc
-    return error_response(500, "internal", "Internal server error")
+    return error_response(500, "internal", "Unexpected failure")
 
 
-@app.get(f"{API_PREFIX}/health", tags=["health"])
-async def health() -> dict[str, str]:
+@app.get(
+    f"{API_PREFIX}/health",
+    tags=["health"],
+    response_model=HealthResponse,
+    responses={
+        200: {"headers": _success_headers()},
+        **_error_responses(429, 500),
+    },
+)
+async def health() -> JSONResponse:
     """Return liveness status and the running API version tag."""
-    return {"status": "ok", "version": settings.api_version}
+    return json_response({"status": "ok", "version": settings.api_version})
+
+
+WARD_CACHE_CONTROL = "public, max-age=300"
+
+
+@app.get(
+    f"{API_PREFIX}/wards",
+    tags=["wards"],
+    response_class=JSONResponse,
+    response_model=WardPage,
+    responses={
+        200: {"headers": _success_headers(ward_cache=True)},
+        **_error_responses(400, 429, 500),
+    },
+)
+async def list_wards(
+    status: Literal["ranked", "insufficient_data"] | None = None,
+    sort: Literal["rank", "score", "name"] = "rank",
+    order: Literal["asc", "desc"] = "asc",
+    q: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> JSONResponse:
+    """List, filter, sort, and paginate C2 ward summaries."""
+    result = data_store.list_wards(
+        status=status,
+        sort=sort,
+        order=order,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return json_response(result, cache_control=WARD_CACHE_CONTROL)
+
+
+@app.get(
+    f"{API_PREFIX}/wards/{{ward_id}}",
+    tags=["wards"],
+    response_class=JSONResponse,
+    response_model=Ward,
+    responses={
+        200: {"headers": _success_headers(ward_cache=True)},
+        **_error_responses(404, 429, 500),
+    },
+)
+async def get_ward(ward_id: str) -> JSONResponse:
+    """Return one C2 ward summary."""
+    ward = data_store.get_ward(ward_id)
+    if ward is None:
+        raise HTTPException(status_code=404, detail="Unknown ward_id")
+    return json_response(ward, cache_control=WARD_CACHE_CONTROL)
+
+
+@app.get(
+    f"{API_PREFIX}/wards/{{ward_id}}/cells",
+    tags=["wards"],
+    response_class=JSONResponse,
+    response_model=CellFeatureCollection,
+    responses={
+        200: {
+            "headers": _success_headers(ward_cache=True),
+            "content": {
+                "application/geo+json": {
+                    "schema": {"$ref": "#/components/schemas/CellFeatureCollection"}
+                }
+            },
+        },
+        **_error_responses(404, 429, 500),
+    },
+)
+async def get_ward_cells(ward_id: str) -> JSONResponse:
+    """Return C2 cells for a known ward, retaining suppression nulls."""
+    if data_store.get_ward(ward_id) is None:
+        raise HTTPException(status_code=404, detail="Unknown ward_id")
+    cells = data_store.get_cells(ward_id)
+    return json_response(
+        cells,
+        cache_control=WARD_CACHE_CONTROL,
+        media_type="application/geo+json",
+    )
+
+
+@app.get(
+    f"{API_PREFIX}/validation",
+    tags=["validation"],
+    response_class=JSONResponse,
+    response_model=ValidationSummary,
+    responses={
+        200: {"headers": _success_headers()},
+        **_error_responses(429, 500),
+    },
+)
+async def get_validation() -> JSONResponse:
+    """Return the configured C3 validation summary."""
+    return json_response(data_store.load_validation_summary())
+
+
+def _c4_openapi() -> dict:
+    """Keep FastAPI's generated validation status aligned with C4's HTTP 400."""
+    if app.openapi_schema is not None:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        summary=app.summary,
+        description=app.description,
+        routes=app.routes,
+    )
+    for path_item in schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if isinstance(operation, dict):
+                operation.get("responses", {}).pop("422", None)
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _c4_openapi

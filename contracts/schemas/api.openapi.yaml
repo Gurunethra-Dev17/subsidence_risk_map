@@ -172,6 +172,7 @@ paths:
       parameters:
         - name: bbox
           in: query
+          required: true
           description: Bounding box as minLon,minLat,maxLon,maxLat.
           schema:
             type: string

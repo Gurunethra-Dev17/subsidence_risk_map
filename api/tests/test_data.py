@@ -383,12 +383,12 @@ def test_c0_geometry_left_join_bbox_and_ward_filters(
     connection = duckdb.connect(database=":memory:")
     connection.execute("LOAD spatial")
     connection.execute(
-        """
+        f"""
         CREATE TABLE c0 (
             bldg_id VARCHAR, ward_id VARCHAR, cell_id VARCHAR,
             geometry {geometry_storage}
         )
-        """.format(geometry_storage=geometry_storage)
+        """
     )
     geometry_value = (
         "ST_AsWKB(ST_GeomFromText(?))"
@@ -403,7 +403,7 @@ def test_c0_geometry_left_join_bbox_and_ward_filters(
         (
             "b-multi", "ward-1", "cell-1",
             "MULTIPOLYGON (((77.20 28.60, 77.21 28.60, 77.21 28.61, 77.20 28.61, 77.20 28.60)), "
-            "((77.28 28.68, 77.30 28.68, 77.30 28.70, 77.28 28.70, 77.28 28.68)))",
+            + "((77.28 28.68, 77.30 28.68, 77.30 28.70, 77.28 28.70, 77.28 28.68)))",
         ),
         (
             "b-unmatched", "ward-2", "cell-2",
@@ -518,7 +518,8 @@ def test_reads_c1_building_parquet() -> None:
     not PARQUET_FIXTURE.is_file() or importlib.util.find_spec("duckdb") is None,
     reason="C1 Parquet fixture and DuckDB are absent from the repository environment",
 )
-def test_bbox_filters_parquet_rows_when_spatial_columns_exist() -> None:
+def test_bbox_rejects_c1_fixture_without_spatial_coordinates() -> None:
+    """The committed mock C1 fixture has no coordinates for bbox filtering."""
     store = APIData(
         DataPaths(
             ward_summary=MOCKS / "ward_summary.json",
@@ -528,8 +529,5 @@ def test_bbox_filters_parquet_rows_when_spatial_columns_exist() -> None:
             buildings_geometry=None,
         )
     )
-    try:
-        result = store.get_buildings(bbox="76.8,28.4,77.4,28.9")
-    except SpatialDataUnavailableError:
-        pytest.skip("C1 Parquet has no coordinate columns for bbox filtering")
-    assert result["type"] == "FeatureCollection"
+    with pytest.raises(SpatialDataUnavailableError):
+        store.get_buildings(bbox="76.8,28.4,77.4,28.9")

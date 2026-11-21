@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -15,14 +14,14 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.auth import require_authority
-from api.data import data_store, json_etag, parse_bbox
 from api.brief import generate_brief_pdf
+from api.data import data_store, json_etag, parse_bbox
 from api.metadata import build_meta_payload
 from api.models import (
     CellFeatureCollection,
-    MetaResponse,
     ErrorEnvelope,
     HealthResponse,
+    MetaResponse,
     ValidationSummary,
     Ward,
     WardPage,
@@ -203,7 +202,7 @@ async def get_meta() -> JSONResponse:
     try:
         payload = build_meta_payload(data_store.load_ward_summary())
         body = MetaResponse(**payload).model_dump(mode="json")
-    except Exception:
+    except Exception:  # noqa: BLE001 - C4 errors must not expose metadata validation details
         return error_response(500, "internal", "Unexpected failure")
     return json_response(body)
 
@@ -410,7 +409,7 @@ async def get_buildings(
 
     try:
         result = data_store.get_buildings(ward_id=ward_id, bbox=bbox, limit=limit)
-    except Exception:
+    except Exception:  # noqa: BLE001 - C4 errors must not expose data/query details
         raise HTTPException(status_code=500, detail="Unexpected failure") from None
 
     # The LEFT JOIN retains C0-only records with sparse=None. A non-boolean sparse

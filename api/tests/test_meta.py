@@ -12,7 +12,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-import api.metadata as metadata
+from api import metadata
 from api.data import APIData, DataPaths
 
 ROOT = Path(__file__).resolve().parents[2]

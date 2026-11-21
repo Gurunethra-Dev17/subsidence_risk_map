@@ -7,8 +7,8 @@ from that directory.
 
 ## Dependencies and startup
 
-Python 3.11 is supported. Install the API and developer dependencies for local
-work:
+Python 3.11 is required (`.python-version` pins the host runtime). Install the
+API and developer dependencies for local work:
 
 ```sh
 python -m pip install -e '.[api,dev,integration]'
@@ -77,6 +77,81 @@ process needs directory traversal and read access to configured files.
 | `API_BUILDINGS_GEOMETRY_PATH` | Optional | C0 building-geometry Parquet. Configure this when authority building responses require C0 geometries. |
 | `API_CORS_ORIGINS` | Optional | Comma-separated allowed browser origins; unset means CORS is disabled. |
 | `API_VERSION` | Optional | API version label; defaults to `starter`. |
+
+## Synthetic staging
+
+Use this mode only for a public demo with synthetic data. It is not production
+configuration and does not satisfy H5's requirement for `/wards` to serve real
+data. `API_ENV=dev` enables committed C2/C3 mocks. The committed C1 mock lacks
+coordinates, so generate the small synthetic C1 file below for bbox-filtered
+`/buildings`. Its metadata is synthetic and is not intended to pass production
+C6 hash/preflight or full C0/C1 integration validation. DuckDB writes Parquet
+fields as physically optional even for source-table `NOT NULL` columns; the
+generator populates all C1-required values, but the artifact is for API behavior
+demonstration only, not strict Arrow nullability validation.
+
+The generator uses DuckDB from the API extra, takes a required output path, and
+refuses to overwrite an existing file. It reads no source artifacts. Generated
+Parquet files are ignored by Git; keep them out of commits and deployment logs.
+Run it during the hosted build, before server startup, so no local Windows path
+is used:
+
+```sh
+# Render native Python build command, from the repository root
+python -m pip install '.[api]' && python -m api.staging_fixture --output out/synthetic_building_metrics.parquet
+
+# Render start command
+python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
+```
+
+In Render's environment settings configure `API_ENV=dev`,
+`API_BUILDING_METRICS_PATH=out/synthetic_building_metrics.parquet`,
+`API_CORS_ORIGINS` as the exact frontend origin, and `AUTHORITY_TOKEN` as a
+strong staging-only secret. Store the token in the host's secret/environment
+settings, never in source, build arguments, logs, or this document. Supplying
+`AUTHORITY_TOKEN` overrides the known development fallback token.
+
+Local Windows PowerShell example (run from the repository root):
+
+```powershell
+python -m pip install '.[api]'
+$env:API_ENV = 'dev'
+$env:API_BUILDING_METRICS_PATH = 'out/synthetic_building_metrics.parquet'
+$env:AUTHORITY_TOKEN = [guid]::NewGuid().ToString('N')
+$env:API_CORS_ORIGINS = 'http://localhost:5173'
+python -m api.staging_fixture --output $env:API_BUILDING_METRICS_PATH
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+Check public endpoints at `https://<staging-host>/api/v1/health` and
+`/api/v1/wards`. `/health` is liveness only; `/wards` intentionally returns
+mock data in this mode. Check unauthenticated `/api/v1/buildings?bbox=76.84,28.40,77.35,28.89&limit=10`
+for 401, then repeat with the `X-Authority-Token` header using the injected
+secret and expect synthetic GeoJSON with `Cache-Control: no-store`. Send an
+OPTIONS preflight with the deployed frontend's exact `Origin` and
+`Access-Control-Request-Method: GET` plus
+`Access-Control-Request-Headers: x-authority-token`; expect the configured CORS
+response. PowerShell checks against a local server:
+
+```powershell
+$base = 'http://127.0.0.1:8000/api/v1'
+Invoke-RestMethod "$base/health"
+Invoke-RestMethod "$base/wards"
+$buildings = "$base/buildings?bbox=76.84,28.40,77.35,28.89&limit=10"
+try { Invoke-WebRequest $buildings -ErrorAction Stop } catch { $_.Exception.Response.StatusCode }
+Invoke-RestMethod $buildings -Headers @{ 'X-Authority-Token' = $env:AUTHORITY_TOKEN }
+Invoke-WebRequest -Method Options -Uri "$base/buildings" -Headers @{
+    Origin = $env:API_CORS_ORIGINS
+    'Access-Control-Request-Method' = 'GET'
+    'Access-Control-Request-Headers' = 'x-authority-token'
+}
+```
+
+For real-data H5, obtain the approved C1/C0, C2, and C3 artifacts from their
+owners, configure production paths and secrets, and run production preflight
+and the separately authorized C0/C1 integration validation. Do not switch a
+public staging service to real artifacts until those checks and access controls
+are reviewed.
 
 ## Request rate limits
 

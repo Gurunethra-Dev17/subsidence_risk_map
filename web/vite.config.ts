@@ -1,0 +1,64 @@
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
+import type { Plugin } from 'vite'
+import type { components } from './types/openapi'
+
+function publicFixtures(): Plugin {
+  const id = 'virtual:public-fixtures'
+  const root = new URL('../contracts/mock/', import.meta.url)
+  type Api = components['schemas']
+
+  return {
+    name: 'public-contract-fixtures',
+    resolveId(source) {
+      return source === id ? '\0' + id : undefined
+    },
+    async load(source) {
+      if (source !== '\0' + id) return
+
+      const read = async (file: string) => {
+        const path = fileURLToPath(new URL(file, root))
+        this.addWatchFile(path)
+        return readFile(path, 'utf8')
+      }
+      const [wards, validation, boundaries, cells, rawExamples] = await Promise.all([
+        read('ward_summary.json'),
+        read('validation_summary.json'),
+        read('delhi-pack-0.0.1/wards.geojson'),
+        read('cell_scores.geojson'),
+        read('api/responses.json'),
+      ])
+      const { meta, wards: page, health } = JSON.parse(rawExamples) as {
+        meta: Pick<Api['MetaResponse'], 'contract_versions'>
+        wards: Pick<Api['WardPage'], 'limit' | 'offset'>
+        health: Api['Health']
+      }
+      const examples = {
+        contractVersions: meta.contract_versions,
+        limit: page.limit,
+        offset: page.offset,
+        health: { status: health.status, version: health.version },
+      }
+
+      // Export only the public examples used by the app.
+      return `
+        export const wards = ${JSON.stringify(wards)}
+        export const validation = ${JSON.stringify(validation)}
+        export const boundaries = ${JSON.stringify(boundaries)}
+        export const cells = ${JSON.stringify(cells)}
+        export const examples = ${JSON.stringify(examples)}
+      `
+    },
+  }
+}
+
+export default defineConfig({
+  plugins: [react(), publicFixtures()],
+  worker: { format: 'es' },
+  server: {
+    // The browser can only access web/. The plugin reads the selected fixtures in Node.
+    fs: { allow: [fileURLToPath(new URL('.', import.meta.url))] },
+  },
+})

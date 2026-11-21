@@ -52,7 +52,7 @@ def _configured_path(env_name: str, mock_default: Path) -> Path | None:
             if path.resolve().is_relative_to(_MOCK_ROOT.resolve()):
                 return None
         except (OSError, RuntimeError):
-            pass
+            return None
     return path
 
 

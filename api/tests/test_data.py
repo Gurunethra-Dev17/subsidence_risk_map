@@ -107,6 +107,29 @@ def test_explicit_relative_nonmock_c2_path_remains_usable(
     assert store.load_ward_summary()["contract"] == "C2@1.0"
 
 
+@pytest.mark.parametrize("resolution_error", [OSError, RuntimeError])
+def test_c2_path_resolution_error_fails_closed_in_production(
+    monkeypatch, tmp_path: Path, resolution_error: type[Exception]
+) -> None:
+    configured_summary = tmp_path / "configured-summary.json"
+    monkeypatch.setenv("API_ENV", "production")
+    monkeypatch.setenv("API_WARD_SUMMARY_PATH", str(configured_summary))
+
+    original_resolve = Path.resolve
+
+    def resolve_configured_path(path: Path, *args, **kwargs) -> Path:
+        if path == configured_summary:
+            raise resolution_error("simulated path resolution failure")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve_configured_path)
+
+    paths = DataPaths()
+    assert paths.ward_summary is None
+    with pytest.raises(FileNotFoundError):
+        APIData(paths).load_ward_summary()
+
+
 @pytest.mark.parametrize("api_env", ["dev", "production"])
 def test_configured_missing_c2_path_fails_without_mock_fallback(
     monkeypatch, tmp_path: Path, api_env: str

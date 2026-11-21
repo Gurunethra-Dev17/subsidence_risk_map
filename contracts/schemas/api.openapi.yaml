@@ -2,47 +2,585 @@ openapi: 3.1.0
 info:
   title: Subsidence Risk Map API
   version: 1.0.0
-  description: C4 API contract. JSON responses follow C2/C3; building data requires authority access.
+  description: >-
+    C4@1.0 API contract. JSON response bodies follow C2/C3 where applicable.
+    Building data requires authority access. CORS permits GET and OPTIONS from
+    origins configured by the deployment; the configured origin list is runtime
+    configuration and is intentionally not fixed in this document.
 servers:
   - url: /api/v1
+x-cors:
+  allowedOrigins: deployment-configured
+  allowedMethods:
+    - GET
+    - OPTIONS
 paths:
   /meta:
     get:
+      operationId: getMeta
+      summary: Get city metadata and contract versions
       responses:
-        '200': {description: City metadata and contract versions}
+        '200':
+          description: City metadata, default mode, and contract versions
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetaResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /wards:
     get:
+      operationId: listWards
+      summary: List ward summaries
       parameters:
-        - {name: status, in: query, schema: {type: string, enum: [ranked, insufficient_data]}}
-        - {name: sort, in: query, schema: {type: string, enum: [rank, score, name]}}
-        - {name: order, in: query, schema: {type: string, enum: [asc, desc]}}
-        - {name: q, in: query, schema: {type: string}}
-        - {name: limit, in: query, schema: {type: integer, default: 50, maximum: 500}}
-        - {name: offset, in: query, schema: {type: integer, default: 0}}
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ranked, insufficient_data]
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [rank, score, name]
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: q
+          in: query
+          description: Ward name search.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
       responses:
-        '200': {description: Paginated C2 ward summaries}
+        '200':
+          description: Paginated C2 ward summaries
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/WardCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WardPage'
+        '400':
+          $ref: '#/components/responses/InvalidParameter'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /wards/{ward_id}:
     get:
-      parameters: [{name: ward_id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: One C2 ward}, '404': {description: Unknown ward}}
+      operationId: getWard
+      summary: Get one ward summary
+      parameters:
+        - $ref: '#/components/parameters/WardId'
+      responses:
+        '200':
+          description: One C2 ward summary
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/WardCacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ward'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /wards/{ward_id}/cells:
     get:
-      parameters: [{name: ward_id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: C2 cell GeoJSON}}
+      operationId: getWardCells
+      summary: Get cell scores for a ward
+      parameters:
+        - $ref: '#/components/parameters/WardId'
+      responses:
+        '200':
+          description: GeoJSON FeatureCollection containing this ward's C2 cells
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/WardCacheControl'
+          content:
+            application/geo+json:
+              schema:
+                $ref: '#/components/schemas/CellFeatureCollection'
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CellFeatureCollection'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /wards/{ward_id}/brief.pdf:
     get:
-      parameters: [{name: ward_id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: PDF brief, content: {application/pdf: {schema: {type: string, format: binary}}}}}
+      operationId: getWardBrief
+      summary: Download a one-page ward inspection brief
+      parameters:
+        - $ref: '#/components/parameters/WardId'
+      responses:
+        '200':
+          description: One-page inspection brief PDF
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /buildings:
     get:
-      security: [{AuthorityToken: []}]
-      responses: {'200': {description: Authority-only building metrics}, '401': {description: Authority token required}}
+      operationId: listBuildings
+      summary: Get authority-only building metrics
+      security:
+        - AuthorityToken: []
+      parameters:
+        - name: bbox
+          in: query
+          required: true
+          description: Bounding box as minLon,minLat,maxLon,maxLat.
+          schema:
+            type: string
+        - name: ward_id
+          in: query
+          description: Filter buildings to one ward.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 500
+      responses:
+        '200':
+          description: Authority-only building metrics as a GeoJSON FeatureCollection
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreCacheControl'
+          content:
+            application/geo+json:
+              schema:
+                $ref: '#/components/schemas/BuildingFeatureCollection'
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuildingFeatureCollection'
+        '400':
+          $ref: '#/components/responses/InvalidParameter'
+        '401':
+          $ref: '#/components/responses/AuthorityRequired'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /validation:
     get:
-      responses: {'200': {description: C3 validation summary}}
+      operationId: getValidation
+      summary: Get the C3 validation summary
+      responses:
+        '200':
+          description: C3 validation summary
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationSummary'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /health:
     get:
-      responses: {'200': {description: Liveness}}
+      operationId: getHealth
+      summary: Check API liveness
+      responses:
+        '200':
+          description: API is live
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   securitySchemes:
-    AuthorityToken: {type: apiKey, in: header, name: X-Authority-Token}
+    AuthorityToken:
+      type: apiKey
+      in: header
+      name: X-Authority-Token
+  parameters:
+    WardId:
+      name: ward_id
+      in: path
+      required: true
+      schema:
+        type: string
+  headers:
+    ETag:
+      description: Entity tag for conditional requests on JSON responses.
+      schema:
+        type: string
+    WardCacheControl:
+      description: Ward endpoint cache policy.
+      schema:
+        type: string
+        const: public, max-age=300
+    NoStoreCacheControl:
+      description: Sensitive or generated content must not be stored by caches.
+      schema:
+        type: string
+        const: no-store
+  responses:
+    InvalidParameter:
+      description: A query parameter is invalid.
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: invalid_param
+              message: bbox must have 4 numbers
+              details: {}
+    AuthorityRequired:
+      description: An authority token is missing or invalid.
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: authority_required
+              message: Authority token required
+              details: {}
+    NotFound:
+      description: The requested ward does not exist.
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: not_found
+              message: Unknown ward_id
+              details: {}
+    RateLimited:
+      description: Too many requests.
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: rate_limited
+              message: Too many requests
+              details: {}
+    InternalError:
+      description: An unexpected failure occurred.
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: internal
+              message: Unexpected failure
+              details: {}
+  schemas:
+    MetaResponse:
+      type: object
+      description: C2 metadata plus the C4 default mode and contract versions.
+      required:
+        - city
+        - data_vintage
+        - generated_utc
+        - engine_version
+        - params
+        - weights
+        - n_wards
+        - n_ranked
+        - default_mode
+        - contract_versions
+      properties:
+        city:
+          type: string
+        data_vintage:
+          type: string
+        generated_utc:
+          type: string
+          format: date-time
+        engine_version:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+        weights:
+          $ref: '#/components/schemas/Weights'
+        n_wards:
+          type: integer
+        n_ranked:
+          type: integer
+        default_mode:
+          type: string
+          description: Default public or authority mode from C6.
+          enum: [public, authority]
+        contract_versions:
+          type: object
+          required: [C0, C1, C2, C3, C4, C5, C6]
+          properties:
+            C0: {type: string}
+            C1: {type: string}
+            C2: {type: string}
+            C3: {type: string}
+            C4: {type: string}
+            C5: {type: string}
+            C6: {type: string}
+    Weights:
+      type: object
+      required: [i1, i2, i3, i4]
+      properties:
+        i1: {type: number}
+        i2: {type: number}
+        i3: {type: number}
+        i4: {type: [number, 'null']}
+    WardPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ward'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+    Ward:
+      type: object
+      required:
+        - ward_id
+        - ward_name
+        - status
+        - n_buildings
+        - n_buildings_with_data
+        - coverage_pct
+        - flags
+      properties:
+        ward_id: {type: string}
+        ward_name: {type: string}
+        status:
+          type: string
+          enum: [ranked, insufficient_data]
+        n_buildings: {type: integer, minimum: 0}
+        n_buildings_with_data: {type: integer, minimum: 0}
+        coverage_pct: {type: number, minimum: 0, maximum: 100}
+        share_sinking_gt4: {type: [number, 'null'], minimum: 0, maximum: 1}
+        vlm_median_mm_yr: {type: [number, 'null']}
+        beta_p90_horizon: {type: [number, 'null']}
+        beta_p90_ratio_horizon: {type: [string, 'null']}
+        gw_stage_pct: {type: [number, 'null']}
+        gw_category: {type: [string, 'null']}
+        score: {type: [number, 'null'], minimum: 0, maximum: 100}
+        rank: {type: [integer, 'null'], minimum: 1}
+        rank_p05: {type: [integer, 'null'], minimum: 1}
+        rank_p95: {type: [integer, 'null'], minimum: 1}
+        flags:
+          type: array
+          items:
+            type: string
+            enum: [sparse_points, groundwater_missing, small_ward, low_coverage, boundary_vintage]
+        histogram:
+          oneOf:
+            - type: 'null'
+            - type: object
+              properties:
+                bin_edges:
+                  type: array
+                  items: {type: number}
+                counts:
+                  type: array
+                  items: {type: integer}
+    CellFeatureCollection:
+      type: object
+      required: [type, features]
+      properties:
+        type: {const: FeatureCollection}
+        features:
+          type: array
+          items:
+            type: object
+            required: [type, geometry, properties]
+            properties:
+              type: {const: Feature}
+              geometry:
+                oneOf:
+                  - type: 'null'
+                  - type: object
+              properties:
+                $ref: '#/components/schemas/CellProperties'
+    CellProperties:
+      type: object
+      required: [cell_id, ward_id, n_buildings, suppressed, vlm_median_mm_yr, beta_p90_horizon, share_sinking_gt4, cell_score, cell_rank_in_ward]
+      properties:
+        cell_id: {type: string}
+        ward_id: {type: [string, 'null']}
+        n_buildings: {type: integer, minimum: 0}
+        suppressed: {type: boolean}
+        vlm_median_mm_yr: {type: [number, 'null']}
+        beta_p90_horizon: {type: [number, 'null']}
+        share_sinking_gt4: {type: [number, 'null']}
+        cell_score: {type: [number, 'null'], minimum: 0, maximum: 100}
+        cell_rank_in_ward: {type: [integer, 'null'], minimum: 1}
+    BuildingFeatureCollection:
+      type: object
+      required: [type, features]
+      properties:
+        type: {const: FeatureCollection}
+        features:
+          type: array
+          items:
+            type: object
+            required: [type, geometry, properties]
+            properties:
+              type: {const: Feature}
+              geometry:
+                type: [object, 'null']
+              properties:
+                $ref: '#/components/schemas/BuildingProperties'
+    BuildingProperties:
+      type: object
+      required: [bldg_id, vlm_mm_yr, beta_ratio_horizon, beta_class, sparse]
+      properties:
+        bldg_id: {type: string}
+        vlm_mm_yr: {type: [number, 'null']}
+        beta_ratio_horizon: {type: [string, 'null']}
+        beta_class: {type: [string, 'null'], enum: [low, watch, inspect, null]}
+        sparse: {type: boolean}
+    ValidationSummary:
+      type: object
+      required: [contract, generated_utc, vt_consistency, collapse_check, hotspot_check, robustness, fresh_data_check, figures]
+      properties:
+        contract: {const: C3@1.0}
+        generated_utc: {type: string, format: date-time}
+        vt_consistency:
+          type: object
+          required: [n_buildings, spearman_rho, labels, confusion_matrix, note]
+          properties:
+            n_buildings: {type: integer}
+            spearman_rho: {type: [number, 'null']}
+            labels:
+              type: array
+              items: {type: string}
+            confusion_matrix:
+              type: array
+              items: {type: array}
+            note: {type: string}
+        collapse_check:
+          type: object
+          required: [n_incidents_total, n_in_city, by_published_risk, by_rank_band, note]
+          properties:
+            n_incidents_total: {type: integer}
+            n_in_city: {type: integer}
+            by_published_risk: {type: object}
+            by_rank_band: {type: object}
+            note: {type: string}
+        hotspot_check:
+          type: array
+          items: {type: object}
+        robustness:
+          type: object
+        fresh_data_check:
+          type: object
+          required: [status, note]
+          properties:
+            status: {type: string}
+            note: {type: string}
+        figures:
+          type: array
+          items: {type: object}
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status: {const: ok}
+        version:
+          type: string
+          description: API version tag.
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code:
+              type: string
+              enum: [invalid_param, authority_required, not_found, rate_limited, internal]
+            message: {type: string}
+            details:
+              type: object
+              additionalProperties: true

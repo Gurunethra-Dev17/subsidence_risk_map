@@ -80,8 +80,8 @@ export default function Dashboard() {
   const [readEvidence, setReadEvidence] = useState(false)
   const validation = useResource(loadValidation, readEvidence)
   const [appearance, setAppearance] = useState<'light' | 'dark'>(() => {
-    try { return localStorage.getItem('map-appearance') === 'light' ? 'light' : 'dark' }
-    catch { return 'dark' }
+    try { return localStorage.getItem('map-appearance') === 'dark' ? 'dark' : 'light' }
+    catch { return 'light' }
   })
   useEffect(() => {
     document.documentElement.dataset.appearance = appearance
@@ -200,7 +200,7 @@ export default function Dashboard() {
                 <div className="map-message"><FailedState label="Ward boundaries" error={geometry.state.error} retry={geometry.retry} /></div>
               ) : mapPending ? <p className="map-message" role="status">Loading ward map…</p> : (
                 <Suspense fallback={<p className="map-message" role="status">Loading map…</p>}>
-                  <MapWorkspace key={wards.attempt + ':' + geometry.attempt} geometry={mapGeometry} selection={selection} onSelect={onSelect}
+                  <MapWorkspace key={wards.attempt + ':' + geometry.attempt} geometry={mapGeometry} selection={selection} onSelect={onSelect} appearance={appearance}
                     authority={authority} onUnauthorized={unauthorized} />
                 </Suspense>
               )}

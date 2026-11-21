@@ -198,8 +198,8 @@ export default memo(function MapLayers({ map, wardId, authority, onUnauthorized,
   authority: AuthoritySession | null
   onUnauthorized: () => void
   onHide: (layer: OverlayKey) => void
-  theme: 'street' | 'dark'
-  onTheme: (theme: 'street' | 'dark') => void
+  theme: 'auto' | 'street' | 'dark'
+  onTheme: (theme: 'auto' | 'street' | 'dark') => void
 }) {
   const [view, setView] = useState<Viewport | null>(null)
   useEffect(() => {
@@ -217,8 +217,11 @@ export default memo(function MapLayers({ map, wardId, authority, onUnauthorized,
   return <details className="layers-control">
     <summary><Layers3 size={17} /> Layers</summary>
     <div className="layers-popover">
-      <label className="basemap-picker">Basemap <select value={theme} onChange={(event) => onTheme(event.target.value === 'dark' ? 'dark' : 'street')}>
-        <option value="street">Street</option><option value="dark">Dark streets</option>
+      <label className="basemap-picker">Basemap <select value={theme} onChange={(event) => {
+        const value = event.target.value
+        onTheme(value === 'dark' || value === 'street' ? value : 'auto')
+      }}>
+        <option value="auto">Follow appearance</option><option value="street">Light streets</option><option value="dark">Dark streets</option>
       </select></label>
       <LayerToggle layer="cells" {...shared} />
       {(config.mock || authority) && <LayerToggle layer="points" {...shared} />}

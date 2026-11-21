@@ -2,7 +2,7 @@
 import { addProtocol, LngLatBounds, Map as MapLibreMap, NavigationControl, removeProtocol, ScaleControl, setWorkerUrl } from 'maplibre-gl'
 import type { MapMouseEvent, SourceSpecification } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { LocateFixed, X } from 'lucide-react'
+import { LocateFixed, RotateCcw, RotateCw, X } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { WardGeometry } from '../api/service'
 import type { AuthoritySession } from '../api/authority'
@@ -14,6 +14,8 @@ import { addBounds, hatchId, hatchImage, selectionLayers, wardFill, wardFilter, 
 import MapLayers from './MapLayers'
 import { describeFeature, featureKey, overlayKeys, overlayLayerId, overlaySettings } from './overlayLayers'
 import type { MapFeature, OverlayKey } from './overlayLayers'
+import { cityBearing, cityPitch, useCityPerspective } from './useCityPerspective'
+import WardPlan from './WardPlan'
 
 setWorkerUrl(workerUrl)
 
@@ -41,25 +43,29 @@ function hitTest(map: MapLibreMap, event: MapMouseEvent) {
   return { ward: hits.find((hit) => hit.layer.id === wardFill)?.properties }
 }
 
-export default function MapWorkspace({ geometry, selection, onSelect, authority, onUnauthorized }: {
+export default function MapWorkspace({ geometry, selection, onSelect, authority, onUnauthorized, appearance }: {
   geometry: WardGeometry | null
   selection: Selection | null
   onSelect: (id: string, origin: Selection['origin']) => void
   authority: AuthoritySession | null
   onUnauthorized: () => void
+  appearance: 'light' | 'dark'
 }) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibreMap | null>(null)
   const overview = useRef<LngLatBounds | null>(null)
   const [instance, setInstance] = useState<MapLibreMap | null>(null)
   const [layerMap, setLayerMap] = useState<MapLibreMap | null>(null)
-  const [theme, setTheme] = useState<'street' | 'dark'>('dark')
+  const [override, setOverride] = useState<'auto' | 'street' | 'dark'>('auto')
+  const theme = override === 'auto' ? (appearance === 'dark' ? 'dark' : 'street') : override
+  const initialTheme = useRef(theme)
   const [styleChange, setStyleChange] = useState<Awaited<ReturnType<typeof loadBasemap>> | null>(null)
   const appliedStyle = useRef<typeof styleChange>(null)
   const lastFocused = useRef<Selection | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [feature, setFeature] = useState<MapFeature | null>(null)
   const [mapError, setMapError] = useState(false)
+  const { active, preferred, change, coverage } = useCityPerspective(layerMap, mapError)
   const [basemap, setBasemap] = useState<BasemapStatus>('loading')
   const [hover, setHover] = useState<Hover | null>(null)
   const [focusMiss, setFocusMiss] = useState<string | null>(null)
@@ -76,7 +82,10 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
     let hasProtocol = false
 
     const reportError = () => {
-      if (!controller.signal.aborted) setMapError(true)
+      if (!controller.signal.aborted) {
+        setLayerMap(null)
+        setMapError(true)
+      }
     }
 
     async function mount(element: HTMLDivElement) {
@@ -104,7 +113,7 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
 
       const current = new MapLibreMap({
         container: element,
-        style: neutralBasemap('dark'),
+        style: neutralBasemap(initialTheme.current),
         bounds: bounds.isEmpty() ? undefined : bounds,
         fitBoundsOptions: { padding: 55, maxZoom: 14, duration: 0 },
         attributionControl: { compact: true },
@@ -112,15 +121,17 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
         renderWorldCopies: false,
         dragRotate: false,
         touchPitch: false,
+        maxPitch: 58,
         cooperativeGestures: true,
       })
       ownedMap = current
       map.current = current
       overview.current = bounds
-      current.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+      current.addControl(new NavigationControl({ showCompass: true }), 'top-right')
       current.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left')
 
       let installingWards = false
+      current.on('webglcontextlost', reportError)
       current.on('error', (event) => {
         const sourceId = 'sourceId' in event ? event.sourceId : undefined
         if (controller.signal.aborted || (typeof sourceId === 'string' && sourceId.startsWith('overlay-'))) return
@@ -197,7 +208,7 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
     void loadBasemap(controller.signal, theme).then((result) => {
       if (controller.signal.aborted) return
       setBasemap(result.status)
-      if (!appliedStyle.current && theme === 'dark' && result.status !== 'available') return
+      if (!appliedStyle.current && theme === initialTheme.current && result.status !== 'available') return
       setLayerMap(null)
       setStyleChange(result)
     })
@@ -248,7 +259,8 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
       if (bounds.isEmpty()) return false
       lastFocused.current = selection
       setFocusMiss(null)
-      current.fitBounds(bounds, { padding: 62, maxZoom: 15.5, duration: 500 })
+      current.fitBounds(bounds, { padding: 62, maxZoom: 15.5, duration: 500,
+        pitch: current.getPitch(), bearing: current.getBearing() })
       return true
     }
     const synthetic = geometry?.features.find((feature) => feature.properties.ward_id === selection.id)
@@ -273,17 +285,31 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
   const resetView = () => {
     const bounds = overview.current
     setFocusMiss(null)
-    if (bounds && !bounds.isEmpty()) map.current?.fitBounds(bounds, { padding: 55, maxZoom: 14, duration: 350 })
+    if (bounds && !bounds.isEmpty()) map.current?.fitBounds(bounds, {
+      padding: 55, maxZoom: 14, duration: 350, pitch: active ? cityPitch : 0, bearing: active ? cityBearing : 0,
+    })
   }
+  const shown3d = active && !mapError
+  const perspectiveStatus = {
+    available: 'Public building heights may be estimated',
+    missing: '2D · no building heights in view',
+    unsupported: '2D · building heights unavailable',
+    zoom: 'Zoom in for 3D buildings',
+    pending: 'Checking for building detail',
+  }[coverage]
 
   return (
     <>
-      <div className="map-canvas" ref={container} aria-label="Map of ward inspection priorities" />
-      {hasGeometry && <MapLayers map={layerMap} wardId={selection?.id ?? null} authority={authority} onUnauthorized={onUnauthorized}
-        theme={theme} onTheme={setTheme} onHide={hideFeature} />}
+      <div className="map-canvas" ref={container} aria-label="Map of ward inspection priorities"
+        data-perspective={shown3d ? '3d' : '2d'} data-basemap={theme} />
+      {mapError && geometry && <WardPlan geometry={geometry} activeId={selection?.id} onSelect={(id) => onSelect(id, 'map')} />}
+      {hasGeometry && !mapError && <MapLayers map={layerMap} wardId={selection?.id ?? null} authority={authority} onUnauthorized={onUnauthorized}
+        theme={override} onTheme={setOverride} onHide={hideFeature} />}
       {!hasGeometry && <p className="map-message">No ward boundaries are available. Ward summaries are accessible from the rankings.</p>}
       {hasGeometry && !instance && !mapError && <p className="map-message" role="status">Loading ward map…</p>}
-      {mapError && <div className="map-message" role="alert">Ward map unavailable. Use the ranking table to inspect wards.
+      {mapError && <div className="map-message plan-message" role="alert">{geometry ?
+        'Interactive graphics unavailable. The 2D ward plan remains selectable.' :
+        'Interactive graphics unavailable. Use the rankings to inspect wards.'}
         <button type="button" className="text-button" onClick={() => {
           setLayerMap(null)
           setStyleChange(null)
@@ -294,6 +320,17 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
       </div>}
       {instance && !mapError && <>
         <button type="button" className="map-reset" title="Reset map view" onClick={resetView} aria-label="Reset map view"><LocateFixed size={17} /></button>
+        <div className="city-view-controls" aria-label="Map perspective">
+          <div className="perspective-buttons">
+            <button type="button" aria-label="2D plan" aria-pressed={preferred === '2d'} onClick={() => change('2d')}>2D</button>
+            <button type="button" aria-label="3D buildings" aria-pressed={preferred === '3d'} onClick={() => change('3d')}>3D</button>
+            {shown3d && <>
+              <button type="button" aria-label="Rotate map left" onClick={() => instance.rotateTo(instance.getBearing() - 30, { duration: 250 })}><RotateCcw size={15} /></button>
+              <button type="button" aria-label="Rotate map right" onClick={() => instance.rotateTo(instance.getBearing() + 30, { duration: 250 })}><RotateCw size={15} /></button>
+            </>}
+          </div>
+          <span className="perspective-status" role="status">{preferred === '2d' ? 'Plan view' : perspectiveStatus}</span>
+        </div>
         {basemap === 'fallback' && <span className="map-note" role="status">Basemap unavailable · ward data visible</span>}
         {basemap === 'degraded' && <span className="map-note" role="status">Some basemap detail is unavailable</span>}
         {focusMiss && focusMiss === selection?.id && <span className="map-note map-note-focus" role="status">Selected ward was outside loaded tiles</span>}
@@ -304,7 +341,7 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
           }}><strong>{hover.label}</strong><span>{hover.detail}</span></div>
         )}
       </>}
-      {visibleFeature && <section className="map-feature" aria-label="Selected map feature">
+      {visibleFeature && !mapError && <section className="map-feature" aria-label="Selected map feature">
         <div><strong>{overlaySettings[visibleFeature.layer].label} · {visibleFeature.id}</strong>
           <button type="button" className="icon-button" aria-label="Clear map feature" onClick={() => setFeature(null)}><X size={15} /></button></div>
         <dl>{visibleFeature.fields.map(({ label, value }) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>

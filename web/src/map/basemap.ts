@@ -1,6 +1,7 @@
 import type { StyleSpecification } from 'maplibre-gl'
 import { config } from '../config'
 import { publicHttpUrl } from '../api/publicUrl'
+import { publicBuildingLayer } from './buildings'
 
 const plainAttribution = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 
@@ -84,7 +85,18 @@ export async function loadBasemap(signal: AbortSignal, theme: 'street' | 'dark' 
         }
       }
     }
-    return { style: { ...remote, layers: [background, ...remote.layers] }, status: 'available' }
+    const extrusion = publicBuildingLayer(remote, theme)
+    const baseLayers = remote.layers.filter((layer) => layer.type !== 'fill-extrusion' || layer['source-layer'] !== 'building')
+    const symbols = baseLayers.filter((layer) => layer.type === 'symbol')
+    const ground = baseLayers.filter((layer) => layer.type !== 'symbol')
+    return {
+      style: {
+        ...remote,
+        light: { anchor: 'viewport', color: '#ffffff', position: [1.2, 220, 42], intensity: 0.48 },
+        layers: [background, ...ground, ...(extrusion ? [extrusion] : []), ...symbols],
+      },
+      status: 'available',
+    }
   } catch {
     return { style: plain, status: 'fallback' }
   }

@@ -152,3 +152,71 @@ nav button[aria-current] { color: #a7e8ff; border-color: #346082; background: #1
   :root { color-scheme: light; background: #fff; }
   .brief-dialog { background: #fff; }
 }
+
+:root[data-appearance="light"] .site-header { background: #fff; color: #18334c; }
+:root[data-appearance="light"] .brand small { color: #566d83; }
+:root[data-appearance="light"] .brand-icon { background: #e5f1f7; color: #1b6287; border-color: #9dbccd; }
+:root[data-appearance="light"] .brand-icon::before,
+:root[data-appearance="light"] .brand-icon::after { border-color: #8bb1c6; }
+:root[data-appearance="light"] nav button,
+:root[data-appearance="light"] .header-button,
+:root[data-appearance="light"] .public-badge { color: #294760; }
+:root[data-appearance="light"] .header-button,
+:root[data-appearance="light"] .public-badge { border-color: #bacbd9; }
+:root[data-appearance="light"] nav button:hover,
+:root[data-appearance="light"] nav button[aria-current],
+:root[data-appearance="light"] .header-button:hover { color: #075476; background: #e6f1f7; border-color: #b7d2e0; }
+:root[data-appearance="light"] .mode-authority { color: #71521a; background: #fff7e3; }
+:root[data-appearance="light"] .map-frame { background: #e9edf0; }
+.map-reset { top: 113px; }
+.city-view-controls {
+  position: absolute;
+  z-index: 3;
+  inset: auto auto 2.65rem .68rem;
+  display: grid;
+  justify-items: start;
+  gap: .23rem;
+  max-width: calc(100% - 1.36rem);
+}
+.perspective-buttons {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  box-shadow: 0 1px 4px #0d253526;
+}
+.perspective-buttons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 33px;
+  padding-inline: .55rem;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  font-weight: 680;
+  font-size: .82rem;
+}
+.perspective-buttons button + button { border-inline-start: 1px solid var(--line); }
+.perspective-buttons button[aria-pressed="true"] { background: var(--selected); color: var(--accent); }
+.perspective-buttons button:hover { background: var(--hover); }
+.perspective-buttons button:focus-visible { outline-offset: -3px; }
+.perspective-status {
+  padding: .23rem .4rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: .75rem;
+  line-height: 1.25;
+}
+.ward-plan { position: absolute; inset: 0; width: 100%; height: 100%; padding-bottom: 4.25rem; background: var(--soft); }
+.ward-plan path { cursor: pointer; }
+.ward-plan path:focus-visible { stroke: var(--focus); stroke-width: 5; }
+.plan-message { top: auto; bottom: .7rem; transform: translateX(-50%); text-align: center; }
+@media (max-width: 580px) {
+  .city-view-controls { bottom: 3.75rem; }
+  .perspective-buttons button { min-height: 38px; }
+}

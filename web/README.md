@@ -33,7 +33,15 @@ Copy `.env.example` to `.env.local` to override defaults. Set `VITE_MOCK_MODE=fa
 
 `VITE_WARDS_TILE_URL` accepts a public C5 PMTiles archive in live mode. The tile host must support HTTP Range requests and cross-origin access if served separately. Live camera focusing uses the geometry available from the archive's loaded ward tiles.
 
-The default map uses the [OpenFreeMap Dark street style](https://openfreemap.org/quick_start/) with provider attribution. The Layers menu offers a street alternative. Set `VITE_BASEMAP_STYLE_URL` for that alternative or supply both `VITE_BASEMAP_TILE_URL` and `VITE_BASEMAP_ATTRIBUTION` for a public raster basemap. Set `VITE_BASEMAP_ENABLED=false` for boundary-only rendering. The basemap provider is optional for inspecting local fixtures.
+The interface starts in light appearance with the [OpenFreeMap Bright street style](https://openfreemap.org/quick_start/). The Layers menu can follow the UI appearance or explicitly select light or dark streets. Set `VITE_BASEMAP_STYLE_URL` to replace the light style or supply both `VITE_BASEMAP_TILE_URL` and `VITE_BASEMAP_ATTRIBUTION` for a public raster basemap. Set `VITE_BASEMAP_ENABLED=false` for boundary-only rendering.
+
+### City perspective
+
+At building detail zoom (14+) the map can extrude polygons from the public OpenMapTiles `building` layer using its positive `render_height` and `render_min_height` above ground in metres. The provider derives these values from available tags and levels. Its schema does not identify the origin of each height, so the scene labels the heights as potentially estimated. These public buildings provide geographic context only. They have no authority risk attributes, and their heights do not represent subsidence or terrain elevation.
+
+The 2D/3D, compass, bearing and reset controls share the same map and ward selection. Zoom in to building detail on small screens. The map stays flat when eligible building data is unavailable, including on a raster basemap. Without WebGL, the published mock ward geometries remain selectable in a simple 2D plan. In live mode without renderable boundaries, rankings and their inspector remain available.
+
+The bundled provider supplies street vector data. Satellite imagery requires a separately licensed raster source, credentials where required by that provider, and attribution. No satellite source is configured.
 
 ## Layers and authority access
 

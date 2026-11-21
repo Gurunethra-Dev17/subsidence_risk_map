@@ -103,10 +103,12 @@ test('mock brief fallback and authority gating at mobile width', async ({ page }
 
 test('appearance toggle persists and validation loads on demand', async ({ page }) => {
   await openMap(page)
-  await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark')
-  await page.getByRole('button', { name: 'Switch to light appearance' }).click()
-  await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-appearance', 'light')
+  await expect(page.locator('.map-canvas')).toHaveAttribute('data-basemap', 'street')
+  await page.getByRole('button', { name: 'Switch to dark appearance' }).click()
+  await expect(page.locator('.map-canvas')).toHaveAttribute('data-basemap', 'dark')
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark')
   await page.getByRole('button', { name: 'Validation' }).click()
   await expect(page.getByRole('figure', { name: 'Incidents' })).toContainText('Full catalogue 26')
 })
@@ -122,9 +124,14 @@ test('basemap switching retains the canvas and selected ward', async ({ page }) 
   await canvas.evaluate((element) => { element.setAttribute('data-lifetime', 'initial') })
   await page.getByText('Layers', { exact: true }).click()
   await Promise.all([
-    page.waitForResponse((response) => new URL(response.url()).pathname === '/styles/positron'),
-    page.getByRole('combobox', { name: 'Basemap', exact: true }).selectOption('street'),
+    page.waitForResponse((response) => new URL(response.url()).pathname === '/styles/dark'),
+    page.getByRole('combobox', { name: 'Basemap', exact: true }).selectOption('dark'),
   ])
   await expect(canvas).toHaveAttribute('data-lifetime', 'initial')
   await expect(page.getByRole('button', { name: 'Demo North' })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Switch to dark appearance' }).click()
+  await page.getByRole('button', { name: 'Switch to light appearance' }).click()
+  await expect(page.locator('.map-canvas')).toHaveAttribute('data-basemap', 'dark')
+  await page.getByRole('combobox', { name: 'Basemap', exact: true }).selectOption('auto')
+  await expect(page.locator('.map-canvas')).toHaveAttribute('data-basemap', 'street')
 })

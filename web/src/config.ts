@@ -6,7 +6,7 @@ export const config = {
   pointTiles: import.meta.env.VITE_POINTS_TILE_URL?.trim(),
   basemapTiles: import.meta.env.VITE_BASEMAP_TILE_URL?.trim(),
   basemapAttribution: import.meta.env.VITE_BASEMAP_ATTRIBUTION?.trim(),
-  basemapStyle: import.meta.env.VITE_BASEMAP_STYLE_URL?.trim() || 'https://tiles.openfreemap.org/styles/positron',
+  basemapStyle: import.meta.env.VITE_BASEMAP_STYLE_URL?.trim() || 'https://tiles.openfreemap.org/styles/bright',
   darkBasemapStyle: 'https://tiles.openfreemap.org/styles/dark',
   basemapEnabled: import.meta.env.VITE_BASEMAP_ENABLED?.trim().toLowerCase() !== 'false',
 }

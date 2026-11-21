@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, BookOpen, ChartNoAxesCombined, FlaskConical, LocateFixed, Map as MapIcon, Moon, ScanLine, Sun } from 'lucide-react'
-import { getDataService } from '../api/service'
+import { getDataService, getSyntheticWardGeometry, isSyntheticDataset } from '../api/service'
 import type { DataService, Ward } from '../api/service'
 import { config } from '../config'
 import Rankings from '../panels/Rankings'
@@ -51,8 +51,8 @@ async function listAllWards(service: DataService, signal: AbortSignal) {
 }
 
 const loadMeta = (service: DataService, signal: AbortSignal) => service.getMeta(signal)
+const loadHealth = (service: DataService, signal: AbortSignal) => service.getHealth(signal)
 const loadValidation = (service: DataService, signal: AbortSignal) => service.getValidation(signal)
-const loadGeometry = (service: DataService) => service.getMockWardGeometry()
 
 function MapLegend() {
   return (
@@ -75,8 +75,12 @@ function FailedState({ label, error, retry }: { label: string; error: string; re
 
 export default function Dashboard() {
   const meta = useResource(loadMeta)
+  const health = useResource(loadHealth, !config.mock)
   const wards = useResource(listAllWards)
-  const geometry = useResource(loadGeometry)
+  const city = meta.state.status === 'ready' ? meta.state.data : undefined
+  const synthetic = isSyntheticDataset(city)
+  const useFixtureBoundaries = config.mock || (synthetic && city?.city === 'delhi' && !config.wardTiles)
+  const geometry = useResource(getSyntheticWardGeometry, useFixtureBoundaries)
   const [readEvidence, setReadEvidence] = useState(false)
   const validation = useResource(loadValidation, readEvidence)
   const [appearance, setAppearance] = useState<'light' | 'dark'>(() => {
@@ -121,23 +125,28 @@ export default function Dashboard() {
     setInspectorOpened(true)
     setInspectorCollapsed(false)
   }, [])
-  const city = meta.state.status === 'ready' ? meta.state.data : undefined
   const entries = wards.state.status === 'ready' ? wards.state.data : undefined
-  const mockGeometry = geometry.state.status === 'ready' ? geometry.state.data : null
+  const fixtureGeometry = useFixtureBoundaries && geometry.state.status === 'ready' ? geometry.state.data : null
   const mapGeometry = useMemo(() => {
-    if (!mockGeometry || !entries) return mockGeometry
+    if (!fixtureGeometry) return null
+    if (!entries) return config.mock ? fixtureGeometry : null
     const byId = new Map(entries.map((ward) => [ward.ward_id, ward]))
+    // Live data must match the bundled fixture IDs before using its boundaries.
+    if (!config.mock && (byId.size !== fixtureGeometry.features.length ||
+      !fixtureGeometry.features.every(({ properties }) => byId.has(properties.ward_id)))) return null
     return {
-      ...mockGeometry,
-      features: mockGeometry.features.map((feature) => {
+      ...fixtureGeometry,
+      features: fixtureGeometry.features.map((feature) => {
         const ward = byId.get(feature.properties.ward_id)
         return { ...feature, properties: {
           ...feature.properties, status: ward?.status ?? null, score: ward?.score ?? null,
         } }
       }),
     }
-  }, [entries, mockGeometry])
-  const mapPending = geometry.state.status === 'loading' || (config.mock && wards.state.status === 'loading')
+  }, [entries, fixtureGeometry])
+  const mapPending = useFixtureBoundaries
+    ? geometry.state.status === 'loading' || wards.state.status === 'loading'
+    : !config.wardTiles && meta.state.status === 'loading'
   const selectedWard = entries?.find((ward) => ward.ward_id === selection?.id)
   const coverage = useMemo(() => {
     if (!entries || !city || entries.length !== city.n_wards) return null
@@ -173,9 +182,11 @@ export default function Dashboard() {
         <div className="workspace-heading">
           <div>
             <h1><Activity size={21} /> {city?.city ?? 'City'} monitoring</h1>
-            <div className="source-status">{config.mock ? <FlaskConical size={14} /> : <Activity size={14} />}
-              <strong>{config.mock ? 'Mock data' : city ? 'Live API' : 'API metadata unavailable'}</strong>
-              <span>{config.mock ? 'Synthetic ward and radar overlays' : city?.data_vintage}</span>
+            <div className="source-status">{synthetic ? <FlaskConical size={14} /> : <Activity size={14} />}
+              <strong>{config.mock ? 'Mock data' : synthetic ? 'Live API · synthetic demo data' : 'Live API'}</strong>
+              <span>{config.mock ? 'Synthetic ward and radar overlays' : synthetic ? 'Fictional ward metrics and boundaries' : city?.data_vintage}</span>
+              {!config.mock && <span role="status">{health.state.status === 'ready' ? `API reachable · ${health.state.data.version}`
+                : health.state.status === 'error' ? 'API health check failed' : 'Checking API health…'}</span>}
             </div>
           </div>
           {city && <dl className="city-totals">
@@ -192,11 +203,11 @@ export default function Dashboard() {
             <div className="panel-heading">
               <span className="section-icon"><MapIcon size={18} /></span>
               <h2 id="map-title">Risk atlas</h2>
-              {config.mock && <span className="map-dataset">Synthetic wards</span>}
+              {mapGeometry && <span className="map-dataset">Synthetic wards</span>}
               {selection && <a className="map-inspect-link" href="#inspector">Ward details</a>}
             </div>
             <div className="map-frame">
-              {geometry.state.status === 'error' ? (
+              {useFixtureBoundaries && geometry.state.status === 'error' ? (
                 <div className="map-message"><FailedState label="Ward boundaries" error={geometry.state.error} retry={geometry.retry} /></div>
               ) : mapPending ? <p className="map-message" role="status">Loading ward map…</p> : (
                 <Suspense fallback={<p className="map-message" role="status">Loading map…</p>}>

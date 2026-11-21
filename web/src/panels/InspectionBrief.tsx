@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Download, Printer } from 'lucide-react'
-import { getDataService } from '../api/service'
+import { getDataService, isSyntheticDataset } from '../api/service'
 import type { Ward } from '../api/service'
 import type { components } from '../../types/openapi'
 import { config } from '../config'
@@ -69,7 +69,7 @@ export default function InspectionBrief({ ward, meta, onClose }: {
         <header>
           <span className="brief-kicker">Subsidence Risk Map · Ward screening</span>
           <h2>{ward.ward_name}</h2>
-          <p>{ward.ward_id} · {meta?.city ?? 'City unavailable'} · {config.mock ? 'Synthetic demonstration' : 'Public ward summary'}</p>
+          <p>{ward.ward_id} · {meta?.city ?? 'City unavailable'} · {isSyntheticDataset(meta) ? 'Synthetic demonstration' : 'Public ward summary'}</p>
         </header>
         <dl className="brief-metrics">
           <div><dt>Priority band</dt><dd>{priority.label}</dd></div>

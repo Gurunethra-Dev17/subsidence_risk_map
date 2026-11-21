@@ -60,7 +60,7 @@ export default function AuthorityAccess({ session, signIn, signOut }: {
         <div className="dialog-content">
           {config.mock ? <p role="status">Authority access is unavailable in mock mode. Building data requires a live, authenticated API.</p> : (
             <form className="authority-form" onSubmit={(event) => void submit(event)}>
-              <p>The API verifies access to restricted building data. The token is held in this tab’s memory. Sessions end after 20 minutes or when you sign out.</p>
+              <p>A protected buildings request verifies your token. The token is held in this tab’s memory. Sessions end after 20 minutes or when you sign out.</p>
               <label>Authority token <input name="token" type="password" required autoComplete="off" spellCheck={false} /></label>
               <details><summary>Protected PMTiles archive (optional)</summary>
                 <label>Archive path on the API origin <input name="archive" type="text" autoComplete="off" placeholder="/private/wards-buildings.pmtiles" /></label>

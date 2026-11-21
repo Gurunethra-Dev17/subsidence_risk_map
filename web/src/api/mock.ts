@@ -8,7 +8,7 @@ type Api = components['schemas']
 const wardFixture: Pick<C2WardSummary, 'contract' | 'meta'> & { wards: Ward[] } = JSON.parse(wards)
 const validationFixture: C3ValidationSummary & Api['ValidationSummary'] = JSON.parse(validation)
 const cellFixture: C2CellScoresGeoJSON = JSON.parse(cells)
-const wardGeometry: WardGeometry = JSON.parse(boundaries)
+export const syntheticWardGeometry: WardGeometry = JSON.parse(boundaries)
 const sortField = { rank: 'rank', score: 'score', name: 'ward_name' } as const
 
 function findWard(wardId: string): Ward {
@@ -75,9 +75,6 @@ export const mockService: DataService = {
   },
   async getHealth() {
     return examples.health
-  },
-  async getMockWardGeometry() {
-    return wardGeometry
   },
   async getMockCellGeometry() {
     return cellFixture

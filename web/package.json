@@ -8,11 +8,13 @@
   },
   "scripts": {
     "dev": "vite --strictPort",
+    "dev:live": "vite --strictPort --host localhost --port 5173 --mode c11",
     "generate:types": "node scripts/generate-types.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "pretest": "node scripts/build-live-test.mjs",
     "test": "playwright test",
+    "test:live": "playwright test --config playwright.live.config.ts",
     "verify:assets": "node scripts/verify-assets.mjs",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --strictPort"

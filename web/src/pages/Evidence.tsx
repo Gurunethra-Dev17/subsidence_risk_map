@@ -1,6 +1,6 @@
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import type { components } from '../../types/openapi'
-import { config } from '../config'
+import { isSyntheticDataset } from '../api/service'
 import ChartFrame from '../panels/ChartFrame'
 
 type Api = components['schemas']
@@ -113,7 +113,7 @@ export default function Evidence({ page, meta, validation, validationError, retr
 }) {
   return <div className="evidence-page">
     <header><h1>{page === 'methods' ? 'Methodology' : 'Validation'}</h1>
-      <p>{config.mock ? 'Synthetic fixture mode · counts and settings demonstrate the workflow.' : 'Contract-backed city evidence and coverage.'}</p>
+      <p>{isSyntheticDataset(meta) ? 'Synthetic demo data · counts and settings demonstrate the workflow.' : 'Contract-backed city evidence and coverage.'}</p>
     </header>
     {page === 'methods' ? <Methodology meta={meta} /> : validation ? <Validation data={validation} /> : validationError
       ? <section className="evidence-section" role="alert"><p>Validation unavailable. {validationError}</p><button type="button" className="text-button" onClick={retry}>Try again</button></section>

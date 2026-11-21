@@ -17,6 +17,29 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). The default public mock mode runs locally with synthetic data. The street basemap uses the network and the ward overlay can run independently. `npm run preview` serves the production build on port 4173.
 
+## C11 local API integration
+
+With Python 3.11 available, run these commands from the frontend repository root to set up the sibling worktree.
+
+```powershell
+git fetch origin e/api-insar:refs/remotes/origin/e/api-insar
+git worktree add --detach ../subsidence_risk_map-c11-backend origin/e/api-insar
+Set-Location ../subsidence_risk_map-c11-backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e '.[api,dev,integration]'
+$env:API_ENV = 'dev'
+$env:API_CORS_ORIGINS = 'http://localhost:5173'
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+In a second terminal, run `npm run dev:live` from `web/` and open [http://localhost:5173](http://localhost:5173). This mode defaults to [the loopback API](http://127.0.0.1:8000/api/v1/health). Its health indicator reports liveness. Rankings, ward details, cells, validation and ward PDFs use HTTP responses from the local process.
+
+The backend's development artifacts contain fictional Delhi demo wards and metrics. When metadata identifies synthetic Delhi data and the ward IDs match, the map draws the checked-in synthetic boundaries without needing an archive. Actual Delhi metrics and hosted PMTiles require separate artifacts and configuration.
+
+Run `npm run test:live` with the backend running and frontend port 5173 free. Playwright starts the frontend and checks the seven public routes, the map and PDF flow, loading and retry, and CORS with unauthenticated buildings rejection. For successful authenticated testing, have the developer inject `AUTHORITY_TOKEN` into the backend process and enter the same token privately in the Authority access dialog. The token goes in the `X-Authority-Token` header of the protected `GET /buildings` request.
+
+The buildings request requires a bounding box. The bundled C1 building metrics lack coordinates, so the backend also needs compatible C0 geometry configured via `API_BUILDINGS_GEOMETRY_PATH` or location-enabled C1 metrics.
+
 ## Contracts and fixtures
 
 `npm run generate:types` regenerates `types/contracts.ts` from every shared JSON schema and `types/openapi.ts` from the C4 OpenAPI document. Edit the generator if its output needs to change and regenerate the files.

@@ -85,6 +85,7 @@ export default defineConfig(({ mode }) => {
   server: {
     // The browser can only access web/. The plugin reads the selected fixtures in Node.
     fs: { allow: [fileURLToPath(new URL('.', import.meta.url))] },
+    watch: { ignored: ['**/.npm-cache/**'] },
   },
   }
 })

@@ -16,7 +16,6 @@ export interface DataService {
   getWardBrief(wardId: string, signal?: AbortSignal): Promise<Blob>
   getValidation(signal?: AbortSignal): Promise<Api['ValidationSummary']>
   getHealth(signal?: AbortSignal): Promise<Api['Health']>
-  getMockWardGeometry(): Promise<WardGeometry | null>
   getMockRadarGeometry(): Promise<RadarGeometry | null>
   getMockCellGeometry(): Promise<Api['CellFeatureCollection'] | null>
 }
@@ -30,6 +29,14 @@ export class DataServiceError extends Error {
     super(message)
     this.name = 'DataServiceError'
   }
+}
+
+export function isSyntheticDataset(meta?: Api['MetaResponse']) {
+  return config.mock || meta?.data_vintage?.trim().toLowerCase() === 'synthetic'
+}
+
+export async function getSyntheticWardGeometry(): Promise<WardGeometry> {
+  return (await import('./mock')).syntheticWardGeometry
 }
 
 async function request(path: string, accept: string, signal?: AbortSignal) {
@@ -89,9 +96,6 @@ const liveService: DataService = {
   },
   getValidation: (signal) => json('/validation', signal),
   getHealth: (signal) => json('/health', signal),
-  async getMockWardGeometry() {
-    return null
-  },
   async getMockRadarGeometry() {
     return null
   },

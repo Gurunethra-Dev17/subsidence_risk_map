@@ -1,10 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, BookOpen, ChartNoAxesCombined, FlaskConical, Layers3, Map as MapIcon } from 'lucide-react'
+import { Activity, BookOpen, ChartNoAxesCombined, FlaskConical, LocateFixed, Map as MapIcon, Moon, ScanLine, Sun } from 'lucide-react'
 import { getDataService } from '../api/service'
 import type { DataService, Ward } from '../api/service'
 import { config } from '../config'
 import Rankings from '../panels/Rankings'
-import WardInspector from '../panels/WardInspector'
 import AuthorityAccess from '../modes/AuthorityAccess'
 import type { AuthoritySession } from '../api/authority'
 import { formatNumber, insufficientBand, scoreBands, unavailableBand } from '../wardMetrics'
@@ -12,14 +11,16 @@ import { formatNumber, insufficientBand, scoreBands, unavailableBand } from '../
 const MapWorkspace = lazy(() => import('../map/MapWorkspace'))
 const Evidence = lazy(() => import('./Evidence'))
 const InspectionBrief = lazy(() => import('../panels/InspectionBrief'))
+const WardInspector = lazy(() => import('../panels/WardInspector'))
 
 type Resource<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'error'; error: string }
 type Selection = { id: string; origin: 'map' | 'ranking' }
 
-function useResource<T>(read: (service: DataService, signal: AbortSignal) => Promise<T>) {
+function useResource<T>(read: (service: DataService, signal: AbortSignal) => Promise<T>, enabled = true) {
   const [state, setState] = useState<Resource<T>>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
+    if (!enabled) return
     const controller = new AbortController()
     void getDataService().then((service) => read(service, controller.signal)).then(
       (data) => { if (!controller.signal.aborted) setState({ status: 'ready', data }) },
@@ -30,7 +31,7 @@ function useResource<T>(read: (service: DataService, signal: AbortSignal) => Pro
       },
     )
     return () => controller.abort()
-  }, [attempt, read])
+  }, [attempt, enabled, read])
   const retry = () => {
     setState({ status: 'loading' })
     setAttempt((count) => count + 1)
@@ -76,12 +77,22 @@ export default function Dashboard() {
   const meta = useResource(loadMeta)
   const wards = useResource(listAllWards)
   const geometry = useResource(loadGeometry)
-  const validation = useResource(loadValidation)
+  const [readEvidence, setReadEvidence] = useState(false)
+  const validation = useResource(loadValidation, readEvidence)
+  const [appearance, setAppearance] = useState<'light' | 'dark'>(() => {
+    try { return localStorage.getItem('map-appearance') === 'light' ? 'light' : 'dark' }
+    catch { return 'dark' }
+  })
+  useEffect(() => {
+    document.documentElement.dataset.appearance = appearance
+    try { localStorage.setItem('map-appearance', appearance) } catch { /* Storage is optional. */ }
+  }, [appearance])
   const [selection, setSelection] = useState<Selection | null>(null)
   const [page, setPage] = useState<'map' | 'methods' | 'validation'>('map')
   const [rankingsCollapsed, setRankingsCollapsed] = useState(false)
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
   const [brief, setBrief] = useState<Ward | null>(null)
+  const [inspectorOpened, setInspectorOpened] = useState(false)
   const [authority, setAuthority] = useState<AuthoritySession | null>(null)
   const [authorityNotice, setAuthorityNotice] = useState('')
   const session = useRef<AuthoritySession | null>(null)
@@ -107,10 +118,8 @@ export default function Dashboard() {
 
   const onSelect = useCallback((id: string, origin: Selection['origin']) => {
     setSelection({ id, origin })
+    setInspectorOpened(true)
     setInspectorCollapsed(false)
-    if (window.matchMedia('(max-width: 900px)').matches) {
-      document.getElementById('inspector')?.focus()
-    }
   }, [])
   const city = meta.state.status === 'ready' ? meta.state.data : undefined
   const entries = wards.state.status === 'ready' ? wards.state.data : undefined
@@ -130,19 +139,31 @@ export default function Dashboard() {
   }, [entries, mockGeometry])
   const mapPending = geometry.state.status === 'loading' || (config.mock && wards.state.status === 'loading')
   const selectedWard = entries?.find((ward) => ward.ward_id === selection?.id)
+  const coverage = useMemo(() => {
+    if (!entries || !city || entries.length !== city.n_wards) return null
+    const totals = entries.reduce((sum, ward) => ({
+      buildings: sum.buildings + ward.n_buildings,
+      measured: sum.measured + ward.n_buildings_with_data,
+    }), { buildings: 0, measured: 0 })
+    return totals.buildings ? formatNumber(100 * totals.measured / totals.buildings) + '%' : null
+  }, [city, entries])
 
   return (
     <>
       <a className="skip-link" href="#main">Skip to workspace</a>
       <header className="site-header">
         <div className="header-inner">
-          <a className="brand" href="#main" onClick={() => setPage('map')}><span className="brand-icon"><Layers3 size={20} /></span>Subsidence Risk Map</a>
+          <a className="brand" href="#main" onClick={() => setPage('map')}><span className="brand-icon"><LocateFixed size={22} /></span><span>Subsidence Risk Map<small>Urban ground-motion monitoring</small></span></a>
           <nav aria-label="Workspace">
             <button type="button" aria-current={page === 'map' ? 'page' : undefined} onClick={() => setPage('map')}><MapIcon size={16} /> Workspace</button>
             <button type="button" aria-current={page === 'methods' ? 'page' : undefined} onClick={() => setPage('methods')}><BookOpen size={16} /> Methodology</button>
-            <button type="button" aria-current={page === 'validation' ? 'page' : undefined} onClick={() => setPage('validation')}><ChartNoAxesCombined size={16} /> Validation</button>
+            <button type="button" aria-current={page === 'validation' ? 'page' : undefined} onClick={() => { setReadEvidence(true); setPage('validation') }}><ChartNoAxesCombined size={16} /> Validation</button>
           </nav>
-          <AuthorityAccess session={authority} signIn={signIn} signOut={() => signOut()} />
+          <div className="header-tools">
+            <button type="button" className="header-button appearance-control" aria-label={appearance === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'}
+              onClick={() => setAppearance((value) => value === 'dark' ? 'light' : 'dark')}>{appearance === 'dark' ? <Sun size={17} /> : <Moon size={17} />}</button>
+            <AuthorityAccess session={authority} signIn={signIn} signOut={() => signOut()} />
+          </div>
         </div>
       </header>
 
@@ -151,24 +172,26 @@ export default function Dashboard() {
         <div className="workspace-view" hidden={page !== 'map'}>
         <div className="workspace-heading">
           <div>
-            <div className="location"><Activity size={15} /> {city?.city ?? 'City workspace'}</div>
-            <h1>Ward screening</h1>
+            <h1><Activity size={21} /> {city?.city ?? 'City'} monitoring</h1>
+            <div className="source-status">{config.mock ? <FlaskConical size={14} /> : <Activity size={14} />}
+              <strong>{config.mock ? 'Mock data' : city ? 'Live API' : 'API metadata unavailable'}</strong>
+              <span>{config.mock ? 'Synthetic ward and radar overlays' : city?.data_vintage}</span>
+            </div>
           </div>
           {city && <dl className="city-totals">
-            <div><dt>Wards</dt><dd>{formatNumber(city.n_wards)}</dd></div>
-            <div><dt>Ranked</dt><dd>{formatNumber(city.n_ranked)}</dd></div>
+            <div><dt>Wards monitored</dt><dd>{formatNumber(city.n_wards)}</dd></div>
+            <div><dt>Inspection ranks</dt><dd>{formatNumber(city.n_ranked)}</dd></div>
             <div><dt>Insufficient data</dt><dd>{formatNumber(city.n_wards - city.n_ranked)}</dd></div>
+            <div title="Buildings with data divided by total buildings across all listed wards"><dt>Building coverage</dt><dd>{coverage ?? '—'}</dd></div>
           </dl>}
         </div>
         {meta.state.status === 'error' && <FailedState label="City metadata" error={meta.state.error} retry={meta.retry} />}
-        {config.mock && <div className="mock-notice"><FlaskConical size={17} /><strong>Mock data</strong>
-          <span>Ward boundaries, scores and radar points are synthetic. Street geography comes from the basemap.</span></div>}
 
         <div className="workspace-grid">
           <section className="panel map-panel" id="workspace" aria-labelledby="map-title">
             <div className="panel-heading">
               <span className="section-icon"><MapIcon size={18} /></span>
-              <h2 id="map-title">Ward risk map</h2>
+              <h2 id="map-title">Risk atlas</h2>
               {config.mock && <span className="map-dataset">Synthetic wards</span>}
               {selection && <a className="map-inspect-link" href="#inspector">Ward details</a>}
             </div>
@@ -186,7 +209,7 @@ export default function Dashboard() {
             <p className="map-caption">City-relative inspection priority <button type="button" className="text-button" onClick={() => setPage('methods')}>How to read the index</button></p>
           </section>
 
-          <div className="sidebar">
+          <aside className="sidebar" aria-label="Ward analysis">
             {wards.state.status === 'ready' ? <Rankings wards={wards.state.data} selectedId={selection?.id ?? null} onSelect={onSelect}
               collapsed={rankingsCollapsed} onCollapse={() => setRankingsCollapsed((value) => !value)} /> : (
               <section className="panel" id="rankings" aria-labelledby="ranking-title">
@@ -195,9 +218,14 @@ export default function Dashboard() {
                   : <FailedState label="Ward rankings" error={wards.state.error} retry={wards.retry} />}
               </section>
             )}
-            <WardInspector id={selection?.id ?? null} name={selectedWard?.ward_name} rankedCount={city?.n_ranked} onClose={() => setSelection(null)}
-              collapsed={inspectorCollapsed} onCollapse={() => setInspectorCollapsed((value) => !value)} onBrief={setBrief} />
-          </div>
+            {inspectorOpened ? <Suspense fallback={<p className="panel-state" role="status">Loading ward inspector…</p>}>
+              <WardInspector id={selection?.id ?? null} name={selectedWard?.ward_name} rankedCount={city?.n_ranked} onClose={() => setSelection(null)}
+                collapsed={inspectorCollapsed} onCollapse={() => setInspectorCollapsed((value) => !value)} onBrief={setBrief} />
+            </Suspense> : <section className="panel inspector empty-inspector" id="inspector" tabIndex={-1}>
+              <div className="panel-heading"><span className="section-icon"><ScanLine size={17} /></span><h2>Ward inspector</h2></div>
+              <p><strong>Awaiting ward selection</strong><span>Choose a boundary or ranking row to review evidence and prepare an inspection brief.</span></p>
+            </section>}
+          </aside>
         </div>
         </div>
 

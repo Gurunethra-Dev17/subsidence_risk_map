@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { LockKeyhole, ShieldCheck } from 'lucide-react'
-import { AuthorityError, openAuthority } from '../api/authority'
+import { AuthorityError } from '../api/authorityErrors'
 import type { AuthoritySession } from '../api/authority'
 import { config } from '../config'
 import Modal from '../panels/Modal'
@@ -38,6 +38,7 @@ export default function AuthorityAccess({ session, signIn, signOut }: {
     setPending(true)
     setError('')
     try {
+      const { openAuthority } = await import('../api/authority')
       const authorized = await openAuthority(token, archive, controller.signal)
       if (controller.signal.aborted) { authorized.close(); return }
       signIn(authorized)

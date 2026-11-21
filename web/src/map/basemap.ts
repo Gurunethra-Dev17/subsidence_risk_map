@@ -1,19 +1,28 @@
 import type { StyleSpecification } from 'maplibre-gl'
 import { config } from '../config'
+import { publicHttpUrl } from '../api/publicUrl'
+
+const plainAttribution = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 
 export type BasemapStatus = 'loading' | 'available' | 'fallback' | 'degraded' | 'disabled'
 
-const background: StyleSpecification['layers'][number] = {
+const background = {
   id: 'workspace-background',
   type: 'background',
   paint: { 'background-color': '#e9edf0' },
+} satisfies StyleSpecification['layers'][number]
+
+export function neutralBasemap(theme: 'street' | 'dark'): StyleSpecification {
+  return { version: 8, sources: {}, layers: [
+    { ...background, paint: { 'background-color': theme === 'dark' ? '#142438' : '#e9edf0' } },
+  ] }
 }
 
 export async function loadBasemap(signal: AbortSignal, theme: 'street' | 'dark' = 'street'): Promise<{
   style: StyleSpecification
   status: Exclude<BasemapStatus, 'loading' | 'degraded'>
 }> {
-  const plain: StyleSpecification = { version: 8, sources: {}, layers: [background] }
+  const plain = neutralBasemap(theme)
   if (!config.basemapEnabled) return { style: plain, status: 'disabled' }
 
   if (theme === 'street' && config.basemapTiles && config.basemapAttribution) {
@@ -25,7 +34,7 @@ export async function loadBasemap(signal: AbortSignal, theme: 'street' | 'dark' 
             type: 'raster',
             tiles: [config.basemapTiles],
             tileSize: 256,
-            attribution: config.basemapAttribution,
+            attribution: plainAttribution(config.basemapAttribution),
           },
         },
         layers: [background, {
@@ -39,7 +48,7 @@ export async function loadBasemap(signal: AbortSignal, theme: 'street' | 'dark' 
 
   try {
     const styleUrl = theme === 'dark' ? config.darkBasemapStyle : config.basemapStyle
-    const response = await fetch(styleUrl, {
+    const response = await fetch(publicHttpUrl(styleUrl, location.href), {
       signal: AbortSignal.any([signal, AbortSignal.timeout(4500)]),
       credentials: 'omit',
     })
@@ -52,7 +61,7 @@ export async function loadBasemap(signal: AbortSignal, theme: 'street' | 'dark' 
     const absolute = (url: string) => {
       const base = response.url || new URL(styleUrl, location.href).href
       // Preserve MapLibre placeholders in tile, glyph and sprite templates.
-      return new URL(url, base).href.replace(/%7B/gi, '{').replace(/%7D/gi, '}')
+      return publicHttpUrl(url, base).href.replace(/%7B/gi, '{').replace(/%7D/gi, '}')
     }
     for (const source of Object.values(remote.sources)) {
       if ('url' in source && source.url) source.url = absolute(source.url)

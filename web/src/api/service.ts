@@ -33,10 +33,11 @@ export class DataServiceError extends Error {
 }
 
 async function request(path: string, accept: string, signal?: AbortSignal) {
+  const timeout = AbortSignal.timeout(20_000)
   const response = await fetch(config.apiUrl + path, {
     headers: { Accept: accept },
     credentials: 'omit',
-    signal,
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   })
   if (!response.ok) {
     const body: Api['ErrorEnvelope'] | undefined = await response.json().catch(() => undefined)
@@ -55,6 +56,7 @@ async function json<T>(path: string, signal?: AbortSignal, accept = 'application
 }
 
 const wardPath = (wardId: string) => `/wards/${encodeURIComponent(wardId)}`
+const wardCache = new Map<string, { ward: Ward; expires: number }>()
 
 const liveService: DataService = {
   getMeta: (signal) => json('/meta', signal),
@@ -65,7 +67,18 @@ const liveService: DataService = {
     }
     return json(params.size ? `/wards?${params}` : '/wards', signal)
   },
-  getWard: (wardId, signal) => json(wardPath(wardId), signal),
+  async getWard(wardId, signal) {
+    signal?.throwIfAborted()
+    const hit = wardCache.get(wardId)
+    if (hit && hit.expires > Date.now()) return hit.ward
+    const ward = await json<Ward>(wardPath(wardId), signal)
+    if (wardCache.size >= 100) {
+      const oldest = wardCache.keys().next().value
+      if (oldest !== undefined) wardCache.delete(oldest)
+    }
+    wardCache.set(wardId, { ward, expires: Date.now() + 60_000 })
+    return ward
+  },
   getWardCells: (wardId, signal) => json(`${wardPath(wardId)}/cells`, signal, 'application/geo+json, application/json'),
   async getWardBrief(wardId, signal) {
     const response = await request(`${wardPath(wardId)}/brief.pdf`, 'application/pdf', signal)

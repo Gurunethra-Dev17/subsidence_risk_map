@@ -1,15 +1,14 @@
-﻿import { useEffect, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useRef, useState } from 'react'
 import { addProtocol, LngLatBounds, Map as MapLibreMap, NavigationControl, removeProtocol, ScaleControl, setWorkerUrl } from 'maplibre-gl'
-import type { LngLat, MapMouseEvent, SourceSpecification } from 'maplibre-gl'
+import type { MapMouseEvent, SourceSpecification } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { LocateFixed, X } from 'lucide-react'
-import { PMTiles, Protocol } from 'pmtiles'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { WardGeometry } from '../api/service'
 import type { AuthoritySession } from '../api/authority'
 import { config } from '../config'
 import { scoreBand, showNumber } from '../wardMetrics'
-import { loadBasemap } from './basemap'
+import { loadBasemap, neutralBasemap } from './basemap'
 import type { BasemapStatus } from './basemap'
 import { addBounds, hatchId, hatchImage, selectionLayers, wardFill, wardFilter, wardLayers, wardSource } from './wardLayers'
 import MapLayers from './MapLayers'
@@ -30,6 +29,18 @@ function featureBounds(map: MapLibreMap, id: string) {
   return bounds
 }
 
+function hitTest(map: MapLibreMap, event: MapMouseEvent) {
+  const layers = [...overlayKeys.map(overlayLayerId), wardFill].filter((id) => map.getLayer(id))
+  if (!layers.length) return {}
+  const hits = map.queryRenderedFeatures(event.point, { layers })
+  for (const key of overlayKeys) {
+    const hit = hits.find((item) => item.layer.id === overlayLayerId(key))
+    const feature = hit && describeFeature(key, hit.properties)
+    if (feature) return { feature }
+  }
+  return { ward: hits.find((hit) => hit.layer.id === wardFill)?.properties }
+}
+
 export default function MapWorkspace({ geometry, selection, onSelect, authority, onUnauthorized }: {
   geometry: WardGeometry | null
   selection: Selection | null
@@ -40,11 +51,14 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibreMap | null>(null)
   const overview = useRef<LngLatBounds | null>(null)
-  const camera = useRef<{ center: LngLat; zoom: number } | null>(null)
+  const [instance, setInstance] = useState<MapLibreMap | null>(null)
   const [layerMap, setLayerMap] = useState<MapLibreMap | null>(null)
-  const [theme, setTheme] = useState<'street' | 'dark'>('street')
+  const [theme, setTheme] = useState<'street' | 'dark'>('dark')
+  const [styleChange, setStyleChange] = useState<Awaited<ReturnType<typeof loadBasemap>> | null>(null)
+  const appliedStyle = useRef<typeof styleChange>(null)
+  const lastFocused = useRef<Selection | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const [feature, setFeature] = useState<MapFeature | null>(null)
-  const [ready, setReady] = useState(false)
   const [mapError, setMapError] = useState(false)
   const [basemap, setBasemap] = useState<BasemapStatus>('loading')
   const [hover, setHover] = useState<Hover | null>(null)
@@ -55,19 +69,29 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
   useEffect(() => {
     const element = container.current
     if (!hasGeometry || !element) return
-
     const controller = new AbortController()
-    let instance: MapLibreMap | undefined
-    const protocol = new Protocol({ metadata: true })
-    addProtocol('pmtiles', protocol.tile)
+    let ownedMap: MapLibreMap | undefined
+    let hoverFrame = 0
+    let lastPointer: MapMouseEvent | null = null
+    let hasProtocol = false
+
+    const reportError = () => {
+      if (!controller.signal.aborted) setMapError(true)
+    }
 
     async function mount(element: HTMLDivElement) {
       const bounds = new LngLatBounds()
-      const basePromise = loadBasemap(controller.signal, theme)
       let source: SourceSpecification
-      if (tiles) {
+      const library = !config.mock && (tiles || config.cellTiles || config.pointTiles) ? await import('pmtiles') : null
+      if (controller.signal.aborted) return
+      const protocol = library && new library.Protocol({ metadata: true })
+      if (protocol) {
+        addProtocol('pmtiles', protocol.tile)
+        hasProtocol = true
+      }
+      if (tiles && library && protocol) {
         const url = new URL(tiles, window.location.href).href
-        const archive = new PMTiles(url)
+        const archive = new library.PMTiles(url)
         const header = await archive.getHeader()
         if (controller.signal.aborted) return
         protocol.add(archive)
@@ -76,16 +100,12 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
       } else if (geometry) {
         source = { type: 'geojson', data: geometry, attribution: 'Synthetic ward fixtures' }
         for (const feature of geometry.features) addBounds(bounds, feature.geometry)
-      } else {
-        return
-      }
-      const base = await basePromise
-      if (controller.signal.aborted) return
+      } else return
 
       const current = new MapLibreMap({
         container: element,
-        style: base.style,
-        ...(camera.current ?? { bounds: bounds.isEmpty() ? undefined : bounds }),
+        style: neutralBasemap('dark'),
+        bounds: bounds.isEmpty() ? undefined : bounds,
         fitBoundsOptions: { padding: 55, maxZoom: 14, duration: 0 },
         attributionControl: { compact: true },
         maxZoom: 19,
@@ -94,101 +114,119 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
         touchPitch: false,
         cooperativeGestures: true,
       })
-      instance = current
+      ownedMap = current
       map.current = current
       overview.current = bounds
-      setBasemap(base.status)
       current.addControl(new NavigationControl({ showCompass: false }), 'top-right')
       current.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left')
 
       let installingWards = false
       current.on('error', (event) => {
-        if (controller.signal.aborted) return
         const sourceId = 'sourceId' in event ? event.sourceId : undefined
-        if (typeof sourceId === 'string' && sourceId.startsWith('overlay-')) return
-        if (sourceId === wardSource || installingWards || base.status !== 'available') {
-          reportError(event.error)
-        } else {
-          // Basemap requests fail independently of the public ward overlay.
-          setBasemap('degraded')
-        }
+        if (controller.signal.aborted || (typeof sourceId === 'string' && sourceId.startsWith('overlay-'))) return
+        if (sourceId === wardSource || installingWards) reportError()
+        else setBasemap('degraded')
       })
-      current.once('style.load', () => {
+      current.on('style.load', () => {
         if (controller.signal.aborted) return
         installingWards = true
         try {
           current.addSource(wardSource, source)
           current.addImage(hatchId, hatchImage())
-          const labels = base.style.layers.find((layer) => layer.type === 'symbol')?.id
+          const labels = current.getStyle().layers.find((layer) => layer.type === 'symbol')?.id
           for (const layer of wardLayers(Boolean(tiles))) current.addLayer(layer, labels)
-          const hitTest = (event: MapMouseEvent) => {
-            const layers = [...overlayKeys.map(overlayLayerId), wardFill].filter((id) => current.getLayer(id))
-            const hits = current.queryRenderedFeatures(event.point, { layers })
-            const layer = overlayKeys.find((key) => hits.some((hit) => hit.layer.id === overlayLayerId(key)))
-            const overlay = layer && hits.find((hit) => hit.layer.id === overlayLayerId(layer))
-            return {
-              feature: layer && overlay ? describeFeature(layer, overlay.properties) : null,
-              ward: hits.find((hit) => hit.layer.id === wardFill)?.properties,
-            }
-          }
-          current.on('mousemove', (event) => {
-            const hit = hitTest(event)
-            current.getCanvas().style.cursor = hit.feature || hit.ward ? 'pointer' : ''
-            const point = { x: event.point.x, y: event.point.y }
-            if (hit.feature) {
-              setHover({ ...point, label: hit.feature.id, detail: hit.feature.fields[0].value, layer: hit.feature.layer })
-            } else if (typeof hit.ward?.ward_name === 'string') {
-              const band = scoreBand(hit.ward.status, hit.ward.score)
-              setHover({ ...point, label: hit.ward.ward_name,
-                detail: band.label + (typeof hit.ward.score === 'number' ? ' · ' + showNumber(hit.ward.score) + '/100' : '') })
-            } else setHover(null)
-          })
-          current.on('mouseout', () => {
-            current.getCanvas().style.cursor = ''
-            setHover(null)
-          })
-          current.on('movestart', () => setHover(null))
-          current.on('click', (event) => {
-            const hit = hitTest(event)
-            setHover(null)
-            if (hit.feature) setFeature(hit.feature)
-            else if (typeof hit.ward?.ward_id === 'string') {
-              setFeature(null)
-              onSelect(hit.ward.ward_id, 'map')
-            }
-          })
+          setInstance(current)
           setLayerMap(current)
-          setReady(true)
-        } catch (error) {
-          reportError(error)
+        } catch {
+          reportError()
         } finally {
           installingWards = false
         }
       })
-    }
-
-    function reportError(error: unknown) {
-      if (controller.signal.aborted) return
-      console.error('Ward map failed to load', error)
-      setMapError(true)
+      const clearHover = () => {
+        lastPointer = null
+        current.getCanvas().style.cursor = ''
+        setHover(null)
+      }
+      current.on('mousemove', (event) => {
+        lastPointer = event
+        if (hoverFrame) return
+        hoverFrame = requestAnimationFrame(() => {
+          hoverFrame = 0
+          if (!lastPointer) return
+          const { feature, ward } = hitTest(current, lastPointer)
+          current.getCanvas().style.cursor = feature || ward ? 'pointer' : ''
+          const { x, y } = lastPointer.point
+          if (feature) {
+            setHover({ x, y, label: feature.id, detail: feature.fields[0].value, layer: feature.layer })
+          } else if (typeof ward?.ward_name === 'string') {
+            const band = scoreBand(ward.status, ward.score)
+            setHover({ x, y, label: ward.ward_name,
+              detail: band.label + (typeof ward.score === 'number' ? ' · ' + showNumber(ward.score) + '/100' : '') })
+          } else setHover(null)
+        })
+      })
+      current.on('mouseout', clearHover)
+      current.on('movestart', clearHover)
+      current.on('click', (event) => {
+        const { feature, ward } = hitTest(current, event)
+        clearHover()
+        if (feature) setFeature(feature)
+        else if (typeof ward?.ward_id === 'string') {
+          setFeature(null)
+          onSelect(ward.ward_id, 'map')
+        }
+      })
     }
 
     void mount(element).catch(reportError)
     return () => {
       controller.abort()
-      instance?.remove()
+      cancelAnimationFrame(hoverFrame)
+      ownedMap?.remove()
       map.current = null
-      removeProtocol('pmtiles')
+      appliedStyle.current = null
+      lastFocused.current = null
+      if (hasProtocol) removeProtocol('pmtiles')
     }
-  }, [geometry, hasGeometry, onSelect, theme, tiles])
+  }, [attempt, geometry, hasGeometry, onSelect, tiles])
 
+  useEffect(() => {
+    if (!instance || instance !== map.current) return
+    const controller = new AbortController()
+    void loadBasemap(controller.signal, theme).then((result) => {
+      if (controller.signal.aborted) return
+      setBasemap(result.status)
+      if (!appliedStyle.current && theme === 'dark' && result.status !== 'available') return
+      setLayerMap(null)
+      setStyleChange(result)
+    })
+    return () => controller.abort()
+  }, [instance, theme])
+
+  useEffect(() => {
+    if (!styleChange || !instance || instance !== map.current || appliedStyle.current === styleChange) return
+    appliedStyle.current = styleChange
+    instance.setStyle(styleChange.style, { diff: false })
+    const timeout = window.setTimeout(() => {
+      if (instance !== map.current || instance.getSource(wardSource)) return
+      setBasemap('fallback')
+      instance.setStyle(neutralBasemap(theme), { diff: false })
+    }, 5000)
+    return () => window.clearTimeout(timeout)
+  }, [instance, styleChange, theme])
+
+  const hideFeature = useCallback((key: OverlayKey) => {
+    setFeature((value) => value?.layer === key ? null : value)
+    setHover((value) => value?.layer === key ? null : value)
+  }, [])
   const visibleFeature = feature && (authority || feature.layer === 'cells' || (config.mock && feature.layer === 'points')) ? feature : null
   useEffect(() => {
     if (!authority) {
-      setFeature((previous) => previous?.layer === 'buildings' || (!config.mock && previous?.layer === 'points') ? null : previous)
-      setHover((previous) => previous?.layer === 'buildings' || (!config.mock && previous?.layer === 'points') ? null : previous)
+      hideFeature('buildings')
+      if (!config.mock) hideFeature('points')
     }
-  }, [authority])
+  }, [authority, hideFeature])
 
   useEffect(() => {
     if (!layerMap) return
@@ -201,41 +239,36 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
   }, [layerMap, visibleFeature])
 
   useEffect(() => {
-    const current = map.current
-    if (!ready || !current) return
-    const id = selection?.id ?? null
-    for (const layer of selectionLayers) current.setFilter(layer, wardFilter(id))
-    if (!id || selection?.origin !== 'ranking') return
+    const current = layerMap
+    if (!current) return
+    for (const layer of selectionLayers) current.setFilter(layer, wardFilter(selection?.id ?? null))
+    if (selection?.origin !== 'ranking' || lastFocused.current === selection) return
 
-    const synthetic = geometry?.features.find((feature) => feature.properties.ward_id === id)
     const focus = (bounds: LngLatBounds) => {
       if (bounds.isEmpty()) return false
+      lastFocused.current = selection
       setFocusMiss(null)
       current.fitBounds(bounds, { padding: 62, maxZoom: 15.5, duration: 500 })
       return true
     }
+    const synthetic = geometry?.features.find((feature) => feature.properties.ward_id === selection.id)
     if (synthetic && focus(addBounds(new LngLatBounds(), synthetic.geometry))) return
-    if (!tiles) return
-    if (focus(featureBounds(current, id))) return
-    // Return to the archive overview to load tiles that may be outside the current viewport.
-    let settled = false
+    if (!tiles || focus(featureBounds(current, selection.id))) return
+
     const finish = () => {
-      if (settled) return
-      settled = true
       current.off('idle', finish)
       clearTimeout(timeout)
-      if (!focus(featureBounds(current, id))) setFocusMiss(id)
+      if (!focus(featureBounds(current, selection.id))) setFocusMiss(selection.id)
     }
     const timeout = window.setTimeout(finish, 2500)
     current.once('idle', finish)
     const bounds = overview.current
     if (bounds && !bounds.isEmpty()) current.fitBounds(bounds, { padding: 55, maxZoom: 14, duration: 0 })
     return () => {
-      settled = true
       clearTimeout(timeout)
       current.off('idle', finish)
     }
-  }, [geometry, ready, selection, tiles])
+  }, [geometry, layerMap, selection, tiles])
 
   const resetView = () => {
     const bounds = overview.current
@@ -247,43 +280,30 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
     <>
       <div className="map-canvas" ref={container} aria-label="Map of ward inspection priorities" />
       {hasGeometry && <MapLayers map={layerMap} wardId={selection?.id ?? null} authority={authority} onUnauthorized={onUnauthorized}
-        theme={theme} onTheme={(next) => {
-          if (next === theme) return
-          const current = map.current
-          if (current) camera.current = { center: current.getCenter(), zoom: current.getZoom() }
+        theme={theme} onTheme={setTheme} onHide={hideFeature} />}
+      {!hasGeometry && <p className="map-message">No ward boundaries are available. Ward summaries are accessible from the rankings.</p>}
+      {hasGeometry && !instance && !mapError && <p className="map-message" role="status">Loading ward map…</p>}
+      {mapError && <div className="map-message" role="alert">Ward map unavailable. Use the ranking table to inspect wards.
+        <button type="button" className="text-button" onClick={() => {
           setLayerMap(null)
-          setReady(false)
+          setStyleChange(null)
+          setInstance(null)
           setMapError(false)
-          setHover(null)
-          setFeature(null)
-          setTheme(next)
-        }}
-        onHide={(key) => {
-          if (feature?.layer === key) setFeature(null)
-          if (hover?.layer === key) setHover(null)
-        }} />}
-      {!hasGeometry && <p className="map-message">No ward boundaries are available.</p>}
-      {hasGeometry && !ready && !mapError && <p className="map-message" role="status">Loading ward map…</p>}
-      {mapError && <p className="map-message" role="alert">Ward map unavailable. Use the ranking table to inspect wards.</p>}
-      {ready && !mapError && (
-        <>
-          <button type="button" className="map-reset" title="Reset map view" onClick={resetView} aria-label="Reset map view">
-            <LocateFixed size={17} />
-          </button>
-          {basemap === 'fallback' && <span className="map-note" role="status">Street basemap unavailable</span>}
-          {basemap === 'degraded' && <span className="map-note" role="status">Some basemap detail is unavailable</span>}
-          {focusMiss === selection?.id && focusMiss && <span className="map-note map-note-focus" role="status">Selected ward was outside loaded tiles</span>}
-          {hover && (authority || hover.layer !== 'buildings') && (config.mock || authority || hover.layer !== 'points') && (
-            <div className="map-tooltip" role="tooltip" style={{
-              left: Math.min(hover.x + 13, (container.current?.clientWidth ?? 215) - 198),
-              top: Math.max(10, hover.y - 64),
-            }}>
-              <strong>{hover.label}</strong>
-              <span>{hover.detail}</span>
-            </div>
-          )}
-        </>
-      )}
+          setAttempt((count) => count + 1)
+        }}>Retry map</button>
+      </div>}
+      {instance && !mapError && <>
+        <button type="button" className="map-reset" title="Reset map view" onClick={resetView} aria-label="Reset map view"><LocateFixed size={17} /></button>
+        {basemap === 'fallback' && <span className="map-note" role="status">Basemap unavailable · ward data visible</span>}
+        {basemap === 'degraded' && <span className="map-note" role="status">Some basemap detail is unavailable</span>}
+        {focusMiss && focusMiss === selection?.id && <span className="map-note map-note-focus" role="status">Selected ward was outside loaded tiles</span>}
+        {hover && (authority || hover.layer !== 'buildings') && (config.mock || authority || hover.layer !== 'points') && (
+          <div className="map-tooltip" role="tooltip" style={{
+            left: Math.max(8, Math.min(hover.x + 13, (container.current?.clientWidth ?? 215) - 198)),
+            top: Math.max(10, hover.y - 64),
+          }}><strong>{hover.label}</strong><span>{hover.detail}</span></div>
+        )}
+      </>}
       {visibleFeature && <section className="map-feature" aria-label="Selected map feature">
         <div><strong>{overlaySettings[visibleFeature.layer].label} · {visibleFeature.id}</strong>
           <button type="button" className="icon-button" aria-label="Clear map feature" onClick={() => setFeature(null)}><X size={15} /></button></div>

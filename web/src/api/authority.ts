@@ -2,26 +2,17 @@ import type { FeatureCollection, Geometry } from 'geojson'
 import type { Source } from 'pmtiles'
 import type { components, operations } from '../../types/openapi'
 import { config } from '../config'
+import { AuthorityError } from './authorityErrors'
 
 type Properties = components['schemas']['BuildingProperties']
 type Query = NonNullable<operations['listBuildings']['parameters']['query']>
 export type BuildingGeometry = FeatureCollection<Geometry | null, Properties>
-
-export class AuthorityError extends Error {
-  constructor(public readonly status: number, message: string) {
-    super(message)
-  }
-}
 
 export interface AuthoritySession {
   expiresAt: number
   archive?: Source
   getBuildings: (query: Query, signal?: AbortSignal) => Promise<BuildingGeometry>
   close: () => void
-}
-
-export function isUnauthorized(error: unknown) {
-  return error instanceof AuthorityError && (error.status === 401 || error.status === 403)
 }
 
 export async function openAuthority(token: string, archivePath: string, signal: AbortSignal): Promise<AuthoritySession> {
@@ -53,7 +44,7 @@ export async function openAuthority(token: string, archivePath: string, signal: 
     try {
       response = await fetch(url, {
         headers: requestHeaders, credentials: 'omit', redirect: 'error', cache: 'no-store',
-        signal: requestSignal ? AbortSignal.any([session.signal, requestSignal]) : session.signal,
+        signal: AbortSignal.any([session.signal, AbortSignal.timeout(20_000), ...(requestSignal ? [requestSignal] : [])]),
       })
     } catch {
       throw new AuthorityError(0, 'The authority service could not be reached.')

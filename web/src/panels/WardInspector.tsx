@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { ChevronDown, CircleHelp, FileText, ScanLine, X } from 'lucide-react'
 import { getDataService } from '../api/service'
 import type { Ward } from '../api/service'
@@ -134,8 +134,12 @@ export default function WardInspector({ id, name, rankedCount, onClose, collapse
   onCollapse: () => void
   onBrief: (ward: Ward) => void
 }) {
+  const root = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (id && window.matchMedia('(max-width: 900px)').matches) root.current?.focus()
+  }, [id])
   return (
-    <section className="panel inspector" id="inspector" aria-labelledby="inspector-title" tabIndex={-1}>
+    <section className="panel inspector" id="inspector" ref={root} aria-labelledby="inspector-title" tabIndex={-1}>
       <div className="panel-heading">
         <span className="section-icon"><ScanLine size={18} /></span>
         <div><h2 id="inspector-title">Ward inspector</h2>{id && <p className="inspector-name">{name ?? id}</p>}</div>

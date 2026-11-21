@@ -22,12 +22,12 @@ export default function DistortionHistogram({ histogram }: { histogram: Ward['hi
       <ChartFrame className="chart-canvas">
         {(size) => (
           <BarChart {...size} accessibilityLayer data={bins} margin={{ top: 8, right: 12, bottom: 0, left: -20 }}>
-            <CartesianGrid vertical={false} stroke="#dce2eb" strokeDasharray="3 4" />
-            <XAxis dataKey="lower" axisLine={false} tickLine={false} tick={{ fill: '#53647b', fontSize: 12 }} minTickGap={18} />
-            <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: '#53647b', fontSize: 12 }} />
-            <Tooltip cursor={{ fill: '#e9eef6' }} labelFormatter={(_label, payload) => payload[0]?.payload.range ?? ''}
+            <CartesianGrid vertical={false} stroke="var(--chart-grid)" strokeDasharray="3 4" />
+            <XAxis dataKey="lower" axisLine={false} tickLine={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} minTickGap={18} />
+            <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} />
+            <Tooltip cursor={{ fill: 'var(--hover)' }} labelFormatter={(_label, payload) => payload[0]?.payload.range ?? ''}
               formatter={(value) => [value, 'Buildings']} />
-            <Bar dataKey="count" name="Buildings" fill="#315f93" radius={[4, 4, 0, 0]} maxBarSize={40} isAnimationActive={false} />
+            <Bar dataKey="count" name="Buildings" fill="var(--chart-series)" radius={[4, 4, 0, 0]} maxBarSize={40} isAnimationActive={false} />
           </BarChart>
         )}
       </ChartFrame>

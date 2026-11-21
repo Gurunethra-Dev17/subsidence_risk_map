@@ -1,11 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Layers3 } from 'lucide-react'
 import { addProtocol, removeProtocol } from 'maplibre-gl'
 import type { Map as MapLibreMap, SourceSpecification } from 'maplibre-gl'
 import type { Feature, FeatureCollection, Geometry } from 'geojson'
-import { PMTiles } from 'pmtiles'
 import { getDataService } from '../api/service'
-import { isUnauthorized } from '../api/authority'
+import { isUnauthorized } from '../api/authorityErrors'
 import type { AuthoritySession } from '../api/authority'
 import { config } from '../config'
 import { makeOverlayLayers, overlayLayerId, overlayLegends, overlaySelection, overlaySettings, overlaySourceId } from './overlayLayers'
@@ -69,6 +68,8 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
     async function install(current: MapLibreMap) {
       let source: SourceSpecification
       if (protectedArchive) {
+        const { PMTiles } = await import('pmtiles')
+        if (controller.signal.aborted) return
         const tileArchive = new PMTiles(protectedArchive)
         const header = await tileArchive.getHeader()
         if (controller.signal.aborted) return
@@ -191,7 +192,7 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
   </div>
 }
 
-export default function MapLayers({ map, wardId, authority, onUnauthorized, onHide, theme, onTheme }: {
+export default memo(function MapLayers({ map, wardId, authority, onUnauthorized, onHide, theme, onTheme }: {
   map: MapLibreMap | null
   wardId: string | null
   authority: AuthoritySession | null
@@ -203,7 +204,10 @@ export default function MapLayers({ map, wardId, authority, onUnauthorized, onHi
   const [view, setView] = useState<Viewport | null>(null)
   useEffect(() => {
     if (!map) return
-    const update = () => setView(readViewport(map))
+    const update = () => {
+      const next = readViewport(map)
+      setView((previous) => previous?.bbox === next.bbox && previous.zoom === next.zoom ? previous : next)
+    }
     update()
     map.on('moveend', update)
     return () => { map.off('moveend', update) }
@@ -221,4 +225,4 @@ export default function MapLayers({ map, wardId, authority, onUnauthorized, onHi
       {authority && <LayerToggle layer="buildings" {...shared} />}
     </div>
   </details>
-}
+})

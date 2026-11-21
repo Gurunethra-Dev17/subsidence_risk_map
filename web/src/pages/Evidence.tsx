@@ -19,11 +19,11 @@ function MetricChart({ rows, label, min = 0 }: { rows: { name: string; value: nu
     <ChartFrame className="evidence-chart-canvas">
       {(size) => (
         <BarChart {...size} accessibilityLayer data={rows} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-          <CartesianGrid vertical={false} stroke="#dbe3ee" strokeDasharray="3 3" />
-          <XAxis dataKey="name" tickLine={false} tick={{ fontSize: 12 }} />
-          <YAxis allowDecimals={min < 0} domain={min < 0 ? [-1, 1] : [0, 'auto']} width={35} tickLine={false} tick={{ fontSize: 12 }} />
+          <CartesianGrid vertical={false} stroke="var(--chart-grid)" strokeDasharray="3 3" />
+          <XAxis dataKey="name" tickLine={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} />
+          <YAxis allowDecimals={min < 0} domain={min < 0 ? [-1, 1] : [0, 'auto']} width={35} tickLine={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} />
           <Tooltip formatter={(value) => [value, label]} />
-          <Bar name={label} dataKey="value" fill="#376d99" maxBarSize={56} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+          <Bar name={label} dataKey="value" fill="var(--chart-series)" maxBarSize={56} radius={[4, 4, 0, 0]} isAnimationActive={false} />
         </BarChart>
       )}
     </ChartFrame>

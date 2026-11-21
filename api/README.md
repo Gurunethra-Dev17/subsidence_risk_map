@@ -78,6 +78,17 @@ process needs directory traversal and read access to configured files.
 | `API_CORS_ORIGINS` | Optional | Comma-separated allowed browser origins; unset means CORS is disabled. |
 | `API_VERSION` | Optional | API version label; defaults to `starter`. |
 
+## Request rate limits
+
+The API allows 60 public data GET requests and 30 `/buildings` GET requests per
+client IP in each 60-second fixed window. `/health` and `OPTIONS` requests are
+exempt. Client IPs come from the ASGI connection; `X-Forwarded-For` is not
+trusted by the application. The limiter has bounded in-memory state and is
+intended for local or single-process staging use. Each worker has independent
+counters, restarts reset them, and clients behind the same untrusted proxy may
+share one address. Use a trusted proxy's rate limiter for multi-worker or
+multi-instance deployments.
+
 All artifact paths must identify readable files. In non-development mode, the
 preflight rejects configured files whose resolved paths point inside
 `contracts/mock`, including relative paths and symlink aliases. Production

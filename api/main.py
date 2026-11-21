@@ -26,6 +26,7 @@ from api.models import (
     Ward,
     WardPage,
 )
+from api.rate_limit import FixedWindowRateLimiter, client_ip_from_scope
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,10 @@ class Settings:
 
 settings = Settings()
 API_PREFIX = "/api/v1"
+PUBLIC_READ_LIMIT = 60
+BUILDINGS_READ_LIMIT = 30
+RATE_LIMIT_WINDOW_SECONDS = 60.0
+rate_limiter = FixedWindowRateLimiter()
 
 app = FastAPI(
     title="Subsidence Risk Map API",
@@ -60,9 +65,34 @@ app = FastAPI(
 
 @app.middleware("http")
 async def protected_buildings_no_store(request: Request, call_next):
-    """Prevent caches from retaining any response from the protected route."""
-    response = await call_next(request)
-    if request.url.path.rstrip("/") == f"{API_PREFIX}/buildings":
+    """Limit API reads and prevent caching responses from protected buildings."""
+    path = request.url.path.rstrip("/")
+    buildings_path = f"{API_PREFIX}/buildings"
+    if request.method == "GET" and path == buildings_path:
+        bucket = "buildings"
+        limit = BUILDINGS_READ_LIMIT
+    elif request.method == "GET" and (
+        path in {f"{API_PREFIX}/meta", f"{API_PREFIX}/wards", f"{API_PREFIX}/validation"}
+        or path.startswith(f"{API_PREFIX}/wards/")
+    ):
+        bucket = "public"
+        limit = PUBLIC_READ_LIMIT
+    else:
+        bucket = None
+        limit = 0
+
+    if bucket is not None and not rate_limiter.allow(
+        client_ip_from_scope(request.scope),
+        bucket=bucket,
+        limit=limit,
+        window_seconds=RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        response = error_response(429, "rate_limited", "Too many requests")
+    else:
+        # OPTIONS (including CORS preflight) and /health bypass the limiter.
+        response = await call_next(request)
+
+    if path == buildings_path:
         response.headers["Cache-Control"] = "no-store"
     return response
 

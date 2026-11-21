@@ -1,4 +1,4 @@
-import type { FeatureCollection, MultiPolygon, Polygon } from 'geojson'
+import type { FeatureCollection, MultiPolygon, Point, Polygon } from 'geojson'
 import type { components, operations } from '../../types/openapi'
 import { config } from '../config'
 
@@ -6,6 +6,7 @@ type Api = components['schemas']
 export type Ward = Api['Ward']
 export type WardQuery = NonNullable<operations['listWards']['parameters']['query']>
 export type WardGeometry = FeatureCollection<Polygon | MultiPolygon, Pick<Ward, 'ward_id' | 'ward_name'>>
+export type RadarGeometry = FeatureCollection<Point, { pt_id: string; vlm_mm_yr: number }>
 
 export interface DataService {
   getMeta(signal?: AbortSignal): Promise<Api['MetaResponse']>
@@ -16,6 +17,8 @@ export interface DataService {
   getValidation(signal?: AbortSignal): Promise<Api['ValidationSummary']>
   getHealth(signal?: AbortSignal): Promise<Api['Health']>
   getMockWardGeometry(): Promise<WardGeometry | null>
+  getMockRadarGeometry(): Promise<RadarGeometry | null>
+  getMockCellGeometry(): Promise<Api['CellFeatureCollection'] | null>
 }
 
 export class DataServiceError extends Error {
@@ -65,11 +68,21 @@ const liveService: DataService = {
   getWard: (wardId, signal) => json(wardPath(wardId), signal),
   getWardCells: (wardId, signal) => json(`${wardPath(wardId)}/cells`, signal, 'application/geo+json, application/json'),
   async getWardBrief(wardId, signal) {
-    return (await request(`${wardPath(wardId)}/brief.pdf`, 'application/pdf', signal)).blob()
+    const response = await request(`${wardPath(wardId)}/brief.pdf`, 'application/pdf', signal)
+    if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/pdf')) {
+      throw new DataServiceError(502, 'The brief endpoint did not return a PDF.')
+    }
+    return response.blob()
   },
   getValidation: (signal) => json('/validation', signal),
   getHealth: (signal) => json('/health', signal),
   async getMockWardGeometry() {
+    return null
+  },
+  async getMockRadarGeometry() {
+    return null
+  },
+  async getMockCellGeometry() {
     return null
   },
 }

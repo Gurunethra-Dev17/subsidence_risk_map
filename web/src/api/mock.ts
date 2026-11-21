@@ -1,8 +1,8 @@
-import { boundaries, cells, examples, validation, wards } from 'virtual:public-fixtures'
+import { boundaries, cells, examples, points, validation, wards } from 'virtual:public-fixtures'
 import type { C2CellScoresGeoJSON, C2WardSummary, C3ValidationSummary } from '../../types/contracts'
 import type { components } from '../../types/openapi'
 import { DataServiceError } from './service'
-import type { DataService, Ward, WardGeometry, WardQuery } from './service'
+import type { DataService, RadarGeometry, Ward, WardGeometry, WardQuery } from './service'
 
 type Api = components['schemas']
 const wardFixture: Pick<C2WardSummary, 'contract' | 'meta'> & { wards: Ward[] } = JSON.parse(wards)
@@ -78,5 +78,21 @@ export const mockService: DataService = {
   },
   async getMockWardGeometry() {
     return wardGeometry
+  },
+  async getMockCellGeometry() {
+    return cellFixture
+  },
+  async getMockRadarGeometry(): Promise<RadarGeometry> {
+    return {
+      type: 'FeatureCollection',
+      features: points.trim().split(/\r?\n/).slice(1).filter(Boolean).map((row) => {
+        const [id, lon, lat, vlm] = row.split(',')
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [Number(lon), Number(lat)] },
+          properties: { pt_id: id, vlm_mm_yr: Number(vlm) },
+        }
+      }),
+    }
   },
 }

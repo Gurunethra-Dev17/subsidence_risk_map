@@ -23,11 +23,12 @@ function publicFixtures(): Plugin {
         this.addWatchFile(path)
         return readFile(path, 'utf8')
       }
-      const [wards, validation, boundaries, cells, rawExamples] = await Promise.all([
+      const [wards, validation, boundaries, cells, points, rawExamples] = await Promise.all([
         read('ward_summary.json'),
         read('validation_summary.json'),
         read('delhi-pack-0.0.1/wards.geojson'),
         read('cell_scores.geojson'),
+        read('delhi-pack-0.0.1/vlm_points.csv'),
         read('api/responses.json'),
       ])
       const { meta, wards: page, health } = JSON.parse(rawExamples) as {
@@ -48,6 +49,7 @@ function publicFixtures(): Plugin {
         export const validation = ${JSON.stringify(validation)}
         export const boundaries = ${JSON.stringify(boundaries)}
         export const cells = ${JSON.stringify(cells)}
+        export const points = ${JSON.stringify(points)}
         export const examples = ${JSON.stringify(examples)}
       `
     },

@@ -94,9 +94,10 @@ def test_explicit_c2_path_is_used_in_dev_and_production(
 def test_explicit_relative_nonmock_c2_path_remains_usable(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     configured_summary = tmp_path / "relative-summary.json"
     shutil.copyfile(MOCKS / "ward_summary.json", configured_summary)
-    relative_path = configured_summary.relative_to(Path.cwd())
+    relative_path = Path("relative-summary.json")
     monkeypatch.setenv("API_ENV", "production")
     monkeypatch.setenv("API_WARD_SUMMARY_PATH", str(relative_path))
 

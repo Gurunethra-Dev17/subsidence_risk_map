@@ -12,7 +12,7 @@ import { loadBasemap, neutralBasemap } from './basemap'
 import type { BasemapStatus } from './basemap'
 import { addBounds, hatchId, hatchImage, selectionLayers, wardFill, wardFilter, wardLayers, wardSource } from './wardLayers'
 import MapLayers from './MapLayers'
-import { describeFeature, featureKey, overlayKeys, overlayLayerId, overlaySettings } from './overlayLayers'
+import { describeFeature, featureKey, overlayHitLayers, overlayKeys, overlaySettings } from './overlayLayers'
 import type { MapFeature, OverlayKey } from './overlayLayers'
 import { cityBearing, cityPitch, useCityPerspective } from './useCityPerspective'
 import WardPlan from './WardPlan'
@@ -32,11 +32,12 @@ function featureBounds(map: MapLibreMap, id: string) {
 }
 
 function hitTest(map: MapLibreMap, event: MapMouseEvent) {
-  const layers = [...overlayKeys.map(overlayLayerId), wardFill].filter((id) => map.getLayer(id))
+  const layers = [...overlayKeys.flatMap(overlayHitLayers), wardFill].filter((id) => map.getLayer(id))
   if (!layers.length) return {}
   const hits = map.queryRenderedFeatures(event.point, { layers })
   for (const key of overlayKeys) {
-    const hit = hits.find((item) => item.layer.id === overlayLayerId(key))
+    const ids = overlayHitLayers(key)
+    const hit = hits.find((item) => ids.includes(item.layer.id))
     const feature = hit && describeFeature(key, hit.properties)
     if (feature) return { feature }
   }
@@ -242,9 +243,11 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
   useEffect(() => {
     if (!layerMap) return
     for (const key of overlayKeys) {
-      const layer = overlayLayerId(key) + '-selection'
-      if (layerMap.getLayer(layer)) {
-        layerMap.setFilter(layer, visibleFeature?.layer === key ? ['==', ['get', featureKey[key]], visibleFeature.id] : false)
+      for (const id of overlayHitLayers(key)) {
+        const layer = id + '-selection'
+        if (layerMap.getLayer(layer)) {
+          layerMap.setFilter(layer, visibleFeature?.layer === key ? ['==', ['get', featureKey[key]], visibleFeature.id] : false)
+        }
       }
     }
   }, [layerMap, visibleFeature])

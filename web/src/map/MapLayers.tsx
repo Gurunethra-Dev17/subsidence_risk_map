@@ -7,7 +7,7 @@ import { getDataService } from '../api/service'
 import { isUnauthorized } from '../api/authorityErrors'
 import type { AuthoritySession } from '../api/authority'
 import { config } from '../config'
-import { makeOverlayLayers, overlayLayerId, overlayLegends, overlaySelection, overlaySettings, overlaySourceId } from './overlayLayers'
+import { makeOverlayLayers, overlayHitLayers, overlayLayerId, overlayLegends, overlaySelection, overlaySettings, overlaySourceId } from './overlayLayers'
 import type { OverlayKey } from './overlayLayers'
 import { selectedLine } from './wardLayers'
 
@@ -113,7 +113,7 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
       current.addSource(sourceId, source)
       const vector = source.type === 'vector'
       vectorSource = vector
-      for (const style of [...makeOverlayLayers(layer, vector, opacityRef.current / 100), overlaySelection(layer, vector)]) {
+      for (const style of [...makeOverlayLayers(layer, vector, opacityRef.current / 100), ...overlaySelection(layer, vector)]) {
         current.addLayer(style, current.getLayer(selectedLine) ? selectedLine : undefined)
         installed.push(style.id)
       }
@@ -129,9 +129,10 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
       }
     }
     const onIdle = () => {
-      const id = overlayLayerId(layer)
-      if (!vectorSource || !map.getLayer(id)) return
-      const visibleCount = map.queryRenderedFeatures({ layers: [id] }).length
+      if (!vectorSource) return
+      const layers = overlayHitLayers(layer).filter((id) => map.getLayer(id))
+      if (!layers.length) return
+      const visibleCount = map.queryRenderedFeatures({ layers }).length
       setStatus((previous) => previous === 'error' ? previous : visibleCount ? 'ready' : 'empty')
     }
     setStatus('loading')
@@ -153,14 +154,15 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
   const changeOpacity = (value: number) => {
     setOpacity(value)
     opacityRef.current = value
-    const id = overlayLayerId(layer)
-    if (!map?.getLayer(id)) return
-    if (layer === 'points') {
-      map.setPaintProperty(id, 'circle-opacity', value / 100)
-      map.setPaintProperty(id, 'circle-stroke-opacity', value / 100)
-    } else {
-      map.setPaintProperty(id, 'fill-opacity', value / 100)
-      if (map.getLayer(id + '-hatch')) map.setPaintProperty(id + '-hatch', 'fill-opacity', value / 100)
+    if (!map) return
+    for (const id of [...overlayHitLayers(layer), overlayLayerId(layer) + '-hatch']) {
+      const style = map.getLayer(id)
+      if (style?.type === 'circle') {
+        map.setPaintProperty(id, 'circle-opacity', value / 100)
+        map.setPaintProperty(id, 'circle-stroke-opacity', value / 100)
+      } else if (style?.type === 'fill') {
+        map.setPaintProperty(id, 'fill-opacity', value / 100)
+      }
     }
   }
 

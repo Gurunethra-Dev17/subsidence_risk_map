@@ -99,7 +99,7 @@ test('rankings show loading and recover from a failed request', async ({ page })
   await expect(rankings.getByRole('button', { name: 'Demo North' })).toBeVisible()
 })
 
-test('CORS permits authority preflight and the protected resource rejects a missing token', async ({ request }) => {
+test('CORS permits authority preflight and the protected resource rejects missing and invalid tokens', async ({ request }) => {
   const preflight = await request.fetch(buildings, {
     method: 'OPTIONS',
     headers: { Origin: origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'x-authority-token' },
@@ -114,8 +114,90 @@ test('CORS permits authority preflight and the protected resource rejects a miss
   expect(response.headers()['cache-control']).toBe('no-store')
   expect(await response.json()).toMatchObject({ error: { code: 'authority_required' } })
 
+  const invalid = await request.get(buildings, { headers: { Origin: origin, 'X-Authority-Token': 'invalid-playwright-credential' } })
+  expect(invalid.status()).toBe(401)
+  expect(invalid.headers()['cache-control']).toBe('no-store')
+  expect(await invalid.json()).toMatchObject({ error: { code: 'authority_required' } })
+
   const missing = await request.get(api + '/wards/no-such-ward', { headers: { Origin: origin } })
   expect(missing.status()).toBe(404)
   expect(missing.headers()['access-control-allow-origin']).toBe(origin)
   expect(await missing.json()).toMatchObject({ error: { code: 'not_found' } })
+})
+
+test('building points can be inspected and disappear on sign out', async ({ page, context }) => {
+  const credential = 'playwright-test-only'
+  let viewportRequests = 0
+  // The public routes remain live. Only the protected transport uses a test double.
+  await page.route(api + '/buildings?**', async (route) => {
+    const request = route.request()
+    const headers = {
+      'access-control-allow-origin': origin,
+      'access-control-allow-headers': 'x-authority-token',
+      'cache-control': 'no-store',
+    }
+    if (request.method() === 'OPTIONS') return route.fulfill({ headers })
+    const query = new URL(request.url()).searchParams
+    const viewport = query.get('limit') === '500'
+    if (viewport) viewportRequests += 1
+    if (request.headers()['x-authority-token'] !== credential) return route.fulfill({ status: 401, headers })
+
+    const features = []
+    if (viewport) {
+      const [west, south, east, north] = (query.get('bbox') ?? '').split(',').map(Number)
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [(west + east) / 2, (south + north) / 2] },
+        properties: { bldg_id: 'SYNTH-DEMO-001', vlm_mm_yr: -4.2, beta_ratio_horizon: '1/500', beta_class: 'inspect', sparse: false },
+      })
+    }
+    await route.fulfill({ headers, json: { type: 'FeatureCollection', features } })
+  })
+
+  await page.goto('/')
+  await expect(page.getByText('Public mode', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Authority access' }).click()
+  await page.getByLabel('Authority token').fill(credential)
+  await page.getByRole('button', { name: 'Verify access' }).click()
+  await expect(page.getByText('Authority mode', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Demo North', exact: true }).click()
+  await page.getByText('Layers', { exact: true }).click()
+  const toggle = page.getByRole('checkbox', { name: /Buildings/ })
+  await toggle.check()
+  await expect(page.getByRole('list', { name: 'Buildings legend' })).toBeVisible()
+  await page.getByText('Layers', { exact: true }).click()
+
+  const canvas = page.locator('.maplibregl-canvas')
+  const bounds = await canvas.boundingBox()
+  if (!bounds) throw new Error('Map canvas is unavailable')
+  const x = bounds.x + bounds.width / 2
+  const y = bounds.y + bounds.height / 2
+  const tooltip = page.getByRole('tooltip').filter({ hasText: 'SYNTH-DEMO-001' })
+  const inspector = page.getByRole('region', { name: 'Selected map feature' })
+  await expect.poll(async () => {
+    await page.mouse.move(x + 1, y)
+    await page.mouse.move(x, y)
+    return tooltip.count()
+  }).toBe(1)
+  await page.mouse.click(x, y)
+  await expect(inspector).toContainText('SYNTH-DEMO-001')
+  await expect(inspector.locator('dd')).toHaveText(['-4.2 mm/yr', '1/500', 'inspect', 'Coverage available'])
+
+  const stored = await page.evaluate(() => JSON.stringify([localStorage, sessionStorage, document.cookie]))
+  expect(stored.includes(credential)).toBe(false)
+  expect((await context.cookies()).some(({ value }) => value.includes(credential))).toBe(false)
+
+  const previousRequests = viewportRequests
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  await expect(page.getByText('Public mode', { exact: true })).toBeVisible()
+  await expect(inspector).toHaveCount(0)
+  await page.getByText('Layers', { exact: true }).click()
+  await expect(toggle).toHaveCount(0)
+  await page.getByText('Layers', { exact: true }).click()
+  await page.mouse.move(x, y)
+  await page.mouse.click(x, y)
+  await expect(tooltip).toHaveCount(0)
+  await expect(inspector).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Demo North', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(viewportRequests).toBe(previousRequests)
 })

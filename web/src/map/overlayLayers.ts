@@ -18,16 +18,19 @@ export const overlayLegends: Record<OverlayKey, { label: string; color: string; 
     { label: 'Inspect', color: buildingColors.inspect }, { label: 'Unavailable', color: buildingColors.missing }],
 }
 export const overlayLayerId = (key: OverlayKey) => `overlay-${key}-main`
+export const buildingPointLayer = overlayLayerId('buildings') + '-points'
+export const overlayHitLayers = (key: OverlayKey) => key === 'buildings' ? [overlayLayerId(key), buildingPointLayer] : [overlayLayerId(key)]
 export const overlaySourceId = (key: OverlayKey) => `overlay-${key}`
 export const overlayKeys: OverlayKey[] = ['buildings', 'points', 'cells']
 export const featureKey = { cells: 'cell_id', points: 'pt_id', buildings: 'bldg_id' }
 
-export function overlaySelection(key: OverlayKey, vector: boolean): LayerSpecification {
+export function overlaySelection(key: OverlayKey, vector: boolean): LayerSpecification[] {
   const base = { id: overlayLayerId(key) + '-selection', source: overlaySourceId(key),
     ...(vector ? { 'source-layer': key } : {}), filter: false as const, minzoom: overlaySettings[key].zoom }
-  return key === 'points'
-    ? { ...base, type: 'circle', paint: { 'circle-radius': 9, 'circle-opacity': 0, 'circle-stroke-color': '#f9db87', 'circle-stroke-width': 3 } }
-    : { ...base, type: 'line', paint: { 'line-color': '#f9db87', 'line-width': 3.5 } }
+  const circle = { ...base, type: 'circle', paint: { 'circle-radius': 9, 'circle-opacity': 0, 'circle-stroke-color': '#f9db87', 'circle-stroke-width': 3 } } satisfies LayerSpecification
+  if (key === 'points') return [circle]
+  const outline = { ...base, type: 'line', paint: { 'line-color': '#f9db87', 'line-width': 3.5 } } satisfies LayerSpecification
+  return key === 'buildings' ? [outline, { ...circle, id: buildingPointLayer + '-selection' }] : [outline]
 }
 
 export function makeOverlayLayers(key: OverlayKey, vector: boolean, opacity: number): LayerSpecification[] {
@@ -42,12 +45,17 @@ export function makeOverlayLayers(key: OverlayKey, vector: boolean, opacity: num
       'circle-opacity': opacity, 'circle-stroke-opacity': opacity,
     },
   }]
-  if (key === 'buildings') return [{
-    ...base, type: 'fill', paint: {
-      'fill-color': ['match', ['get', 'beta_class'], 'low', buildingColors.low, 'watch', buildingColors.watch, 'inspect', buildingColors.inspect, buildingColors.missing],
-      'fill-outline-color': '#152f4c', 'fill-opacity': opacity,
-    },
-  }]
+  if (key === 'buildings') {
+    const color: ExpressionSpecification = ['match', ['get', 'beta_class'], 'low', buildingColors.low,
+      'watch', buildingColors.watch, 'inspect', buildingColors.inspect, buildingColors.missing]
+    return [
+      { ...base, type: 'fill', paint: { 'fill-color': color, 'fill-outline-color': '#152f4c', 'fill-opacity': opacity } },
+      { ...base, id: buildingPointLayer, type: 'circle', paint: {
+        'circle-radius': 6, 'circle-color': color, 'circle-stroke-color': '#152f4c',
+        'circle-stroke-width': 1, 'circle-opacity': opacity, 'circle-stroke-opacity': opacity,
+      } },
+    ]
+  }
 
   const suppressed = ['==', ['get', 'suppressed'], true] satisfies ExpressionSpecification
   return [

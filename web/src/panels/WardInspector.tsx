@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { ChevronDown, CircleHelp, FileText, ScanLine, X } from 'lucide-react'
-import { getDataService } from '../api/service'
+import { lazy, Suspense } from 'react'
+import { CircleHelp, ScanLine } from 'lucide-react'
 import type { Ward } from '../api/service'
+import { overlaySettings } from '../map/overlayLayers'
+import type { MapFeature } from '../map/overlayLayers'
 import { flagLabels, formatNumber, rankRange, scoreBand, showNumber } from '../wardMetrics'
 
 const DistortionHistogram = lazy(() => import('./DistortionHistogram'))
@@ -28,7 +29,7 @@ function Indicators({ ward }: { ward: Ward }) {
   ]
   return (
     <section className="inspector-section" aria-labelledby="indicator-heading">
-      <h4 id="indicator-heading">Component indicators</h4>
+      <h3 id="indicator-heading">Component indicators</h3>
       <dl className="indicator-list">
         {values.map(({ label, value, help }) => (
           <div key={label}><dt>{label}<Explanation label={label} text={help} /></dt>
@@ -47,7 +48,7 @@ function Quality({ ward, rankedCount }: { ward: Ward; rankedCount?: number }) {
   const scale = (rank: number) => maxRank > 1 ? (rank - 1) / (maxRank - 1) * 100 : 50
   return (
     <section className="inspector-section" aria-labelledby="quality-heading">
-      <h4 id="quality-heading">Coverage &amp; uncertainty</h4>
+      <h3 id="quality-heading">Coverage &amp; uncertainty</h3>
       <div className="quality-label"><span>Buildings with data</span><strong>{formatNumber(ward.n_buildings_with_data)} / {formatNumber(ward.n_buildings)}</strong></div>
       <progress aria-label="Building data coverage" value={ward.coverage_pct} max={100} />
       {range ? (
@@ -81,11 +82,13 @@ function WardAnalytics({ ward, rankedCount }: { ward: Ward; rankedCount?: number
         </dl>
         {ward.status === 'insufficient_data' && <p className="insufficient-message">Available coverage is insufficient to assign a score or rank.</p>}
       </div>
-      <Indicators ward={ward} />
-      <Quality ward={ward} rankedCount={rankedCount} />
+      <div className="analytics-grid">
+        <Indicators ward={ward} />
+        <Quality ward={ward} rankedCount={rankedCount} />
+      </div>
       <section className="inspector-section" aria-labelledby="histogram-heading">
         <div className="analytics-heading">
-          <h4 id="histogram-heading">Building distortion distribution</h4>
+          <h3 id="histogram-heading">Building distortion distribution</h3>
           <Explanation label="building distortion distribution" text="The distribution counts buildings in angular distortion bins over the projection horizon. Published counts are aggregated at ward level." />
         </div>
         <Suspense fallback={<p className="muted-copy" role="status">Loading distribution…</p>}>
@@ -96,62 +99,29 @@ function WardAnalytics({ ward, rankedCount }: { ward: Ward; rankedCount?: number
   )
 }
 
-type WardResult = { ward: Ward; error?: never } | { ward?: never; error: string }
-
-function SelectedWard({ id, rankedCount, onBrief }: { id: string; rankedCount?: number; onBrief: (ward: Ward) => void }) {
-  const [attempt, setAttempt] = useState(0)
-  const [result, setResult] = useState<WardResult | null>(null)
-  useEffect(() => {
-    const controller = new AbortController()
-    void getDataService().then((service) => service.getWard(id, controller.signal)).then(
-      (ward) => { if (!controller.signal.aborted) setResult({ ward }) },
-      (error: unknown) => {
-        if (!controller.signal.aborted) setResult({ error: error instanceof Error ? error.message : 'An unexpected error occurred.' })
-      },
-    )
-    return () => controller.abort()
-  }, [attempt, id])
-
-  if (!result) return <div className="panel-state" role="status">Loading ward details…</div>
-  if (result.ward) {
-    const ward = result.ward
-    return <>
-      <div className="inspect-brief-action"><button type="button" className="secondary-button" onClick={() => onBrief(ward)}><FileText size={16} /> Inspection brief</button></div>
-      <WardAnalytics ward={ward} rankedCount={rankedCount} />
-    </>
-  }
-  return <div className="panel-state" role="alert">Unable to load ward details. {result.error}
-    <button className="text-button" type="button" onClick={() => { setResult(null); setAttempt((count) => count + 1) }}>Try again</button>
-  </div>
-}
-
-export default function WardInspector({ id, name, rankedCount, onClose, collapsed, onCollapse, onBrief }: {
-  id: string | null
-  name?: string
+export default function WardInspector({ ward, rankedCount, feature }: {
+  ward: Ward
   rankedCount?: number
-  onClose: () => void
-  collapsed: boolean
-  onCollapse: () => void
-  onBrief: (ward: Ward) => void
+  feature: MapFeature | null
 }) {
-  const root = useRef<HTMLElement>(null)
-  useEffect(() => {
-    if (id && window.matchMedia('(max-width: 900px)').matches) root.current?.focus()
-  }, [id])
   return (
-    <section className="panel inspector" id="inspector" ref={root} aria-labelledby="inspector-title" tabIndex={-1}>
+    <section className="panel inspector" id="inspector" aria-labelledby="inspector-title">
       <div className="panel-heading">
         <span className="section-icon"><ScanLine size={18} /></span>
-        <div><h2 id="inspector-title">Ward inspector</h2>{id && <p className="inspector-name">{name ?? id}</p>}</div>
-        <div className="inspector-actions">
-          {id && <button type="button" className="icon-button" aria-label="Clear ward selection" onClick={onClose}><X size={17} /></button>}
-          <button type="button" className="icon-button" aria-expanded={!collapsed} aria-controls="inspector-content" aria-label={collapsed ? 'Expand inspector' : 'Collapse inspector'} onClick={onCollapse}><ChevronDown size={17} /></button>
-        </div>
+        <div><h2 id="inspector-title">{ward.ward_name}</h2><p className="muted-copy">{ward.ward_id}</p></div>
       </div>
-      <div id="inspector-content" hidden={collapsed}>
-        {id ? <SelectedWard key={id} id={id} rankedCount={rankedCount} onBrief={onBrief} />
-          : <p className="inspector-empty">Select a ward on the map or in the rankings to see its indicators and data quality.</p>}
-      </div>
+      <WardAnalytics ward={ward} rankedCount={rankedCount} />
+      <section className="inspector-section" aria-labelledby="feature-heading">
+        <h3 id="feature-heading">Map feature evidence</h3>
+        {feature ? <>
+          <p><strong>{overlaySettings[feature.layer].label} · {feature.id}</strong></p>
+          <dl className="indicator-list">{feature.fields.map(({ label, value }) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+        </> : <p className="muted-copy">Select a feature in an available map layer to inspect its details here.</p>}
+      </section>
+      <section className="inspector-section" aria-labelledby="inspector-limitations">
+        <h3 id="inspector-limitations">Scientific limitations</h3>
+        <p className="muted-copy">The index prioritises field inspections. Building safety requires separate evidence. Distortion estimates assume constant ground-motion rates over the scenario horizon.</p>
+      </section>
     </section>
   )
 }

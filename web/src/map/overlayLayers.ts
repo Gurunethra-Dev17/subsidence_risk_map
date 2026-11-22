@@ -8,7 +8,7 @@ export const overlaySettings = {
 } as const
 
 export type OverlayKey = keyof typeof overlaySettings
-export type MapFeature = { layer: OverlayKey; id: string; fields: { label: string; value: string }[] }
+export type MapFeature = { layer: OverlayKey; id: string; wardId?: string; fields: { label: string; value: string }[] }
 const radarColors = { sinking: '#cf621c', other: '#276d9f', missing: '#8796a5' }
 const buildingColors = { low: '#559dc2', watch: '#e6b34e', inspect: '#a54b88', missing: '#8796a5' }
 export const overlayLegends: Record<OverlayKey, { label: string; color: string; hatch?: boolean }[]> = {

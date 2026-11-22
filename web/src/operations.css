@@ -3,14 +3,9 @@
 .header-inner { min-height: 3.55rem; }
 .brand { white-space: nowrap; }
 .brand-icon { background: #274660; color: #c5e4f5; }
-.mode-switch, .inspector-actions { display: flex; align-items: center; gap: .4rem; }
-.mode-switch { flex-wrap: wrap; justify-content: end; }
 .mode-authority { border-color: #bda269; color: #f9dfab; }
-.header-button, nav button { display: inline-flex; align-items: center; gap: .36rem; border: 1px solid transparent; background: none; color: #dae6f2; border-radius: 5px; font-size: .84rem; white-space: nowrap; }
+.header-button { display: inline-flex; align-items: center; gap: .36rem; border: 1px solid transparent; background: none; color: #dae6f2; border-radius: 5px; font-size: .84rem; white-space: nowrap; }
 .header-button { border-color: #486279; padding: .34rem .47rem; }
-nav button { padding: .44rem .62rem; }
-nav button:hover, nav button[aria-current] { background: #263d53; color: #fff; }
-nav button[aria-current] { border-color: #415d76; }
 .header-button:hover { background: #263d53; }
 .app-main { padding-block: .78rem .9rem; }
 .workspace-heading { align-items: center; margin-bottom: .59rem; }
@@ -28,10 +23,8 @@ nav button[aria-current] { border-color: #415d76; }
 .map-legend { padding-block: .45rem .25rem; }
 .map-caption { padding-bottom: .45rem; }
 .map-caption button { font-size: inherit; margin-left: .3rem; }
-.inspector-actions { margin-left: auto; }
 .panel-heading .icon-button { min-width: 1.85rem; min-height: 1.75rem; }
 .panel-heading button[aria-expanded="true"] svg { transform: rotate(180deg); }
-.inspect-brief-action { padding: .02rem .8rem .55rem; }
 .sidebar { gap: .68rem; }
 .primary-button, .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border-radius: 5px; border: 1px solid var(--line); padding: .4rem .64rem; font-size: .85rem; font-weight: 650; text-decoration: none; }
 .primary-button { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -84,7 +77,6 @@ nav button[aria-current] { border-color: #415d76; }
 .authority-form [role="alert"] { color: #8a2b20; }
 .authority-form .primary-button { justify-self: start; }
 
-.brief-dialog { width: min(690px, calc(100% - 1.3rem)); background: #e9eff5; }
 .brief-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; padding: .55rem .85rem; color: var(--muted); font-size: .82rem; }
 .brief-toolbar > span { margin-right: auto; }
 .brief-paper { margin: 0 .8rem .8rem; padding: 1.12rem 1.35rem; background: #fff; border: 1px solid var(--line); color: #142639; }
@@ -145,24 +137,19 @@ nav button[aria-current] { border-color: #415d76; }
   .sidebar .table-viewport { max-height: min(29vh, 235px); }
   .inspector { display: flex; flex-direction: column; min-height: 0; }
   .inspector > .panel-heading { flex-shrink: 0; }
-  #inspector-content { min-height: 0; overflow: auto; scrollbar-gutter: stable; }
 }
 
 @media (max-width: 900px) {
   .workspace-grid { grid-template-columns: minmax(0, 1fr); }
   .city-totals div { display: block; }
-  .mode-switch { gap: .28rem; }
 }
 @media (max-width: 580px) {
   .header-inner { padding-bottom: .28rem; }
   .brand { white-space: normal; }
-  .public-badge, .header-button { font-size: .74rem; }
-  .mode-switch { max-width: 10rem; }
-  nav button { padding-inline: .37rem; }
+  .header-button { font-size: .74rem; }
   .workspace-heading > div:first-child { gap: .3rem; }
   .city-totals div { display: flex; gap: .32rem; }
   .map-panel .panel-heading { gap: .38rem; flex-wrap: wrap; }
-  .map-inspect-link { white-space: nowrap; }
   .method-indicators { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .method-indicators > div:nth-child(3) { border-left: 0; }
   .method-indicators > div:nth-child(n+3) { border-top: 1px solid var(--line); }
@@ -173,10 +160,9 @@ nav button[aria-current] { border-color: #415d76; }
 @media print {
   @page { size: A4; margin: 13mm; }
   html, body { background: #fff; }
-  body:has(.brief-dialog[open]) .site-header, body:has(.brief-dialog[open]) #main, body:has(.brief-dialog[open]) .skip-link,
-  .brief-dialog .dialog-bar, .brief-toolbar, .pdf-preview { display: none !important; }
-  .brief-dialog::backdrop { display: none; }
-  .brief-dialog[open] { position: static; width: 100%; max-width: none; max-height: none; margin: 0; overflow: visible; border: 0; box-shadow: none; }
+  body:has(.brief-view) :is(.site-header, .skip-link, .session-notice, .detail-heading, .ward-context, .brief-toolbar, .pdf-preview) { display: none !important; }
+  body:has(.brief-view) #main { width: 100%; padding: 0; }
+  .brief-view { border: 0; box-shadow: none; overflow: visible; }
   .brief-paper { padding: 0; margin: 0; border: 0; }
   .brief-paper tr, .brief-paper footer { break-inside: avoid; }
 }

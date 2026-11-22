@@ -29,13 +29,12 @@ svg { flex-shrink: 0; }
 .site-header { background: var(--navy); color: #f6faff; border-bottom: 1px solid #2b4059; }
 .header-inner, .container { width: min(100% - 3rem, 1580px); margin-inline: auto; }
 .header-inner { min-height: 3.85rem; display: flex; align-items: center; justify-content: space-between; gap: 1.15rem; }
-.brand, nav a, .public-badge { display: inline-flex; align-items: center; gap: .55rem; text-decoration: none; }
+.brand, nav a { display: inline-flex; align-items: center; gap: .55rem; text-decoration: none; }
 .brand { font-weight: 720; letter-spacing: -.015em; }
 .brand-icon { width: 2.15rem; height: 2.15rem; display: grid; place-items: center; border-radius: 7px; background: #263e59; color: #a5d3f3; }
 nav { display: flex; align-items: center; gap: .25rem; }
 nav a { color: #dce7f3; font-size: .9rem; font-weight: 620; padding: .45rem .7rem; border-radius: 6px; }
 nav a:hover, nav a:focus-visible { background: #253b55; }
-.public-badge { padding: .34rem .55rem; border: 1px solid #4c627a; border-radius: 5px; color: #dcecfb; font-size: .82rem; white-space: nowrap; }
 
 .container { padding-block: 1.55rem 2rem; }
 .workspace-heading { display: flex; justify-content: space-between; align-items: end; gap: 1.2rem; margin-bottom: 1rem; }
@@ -63,7 +62,6 @@ nav a:hover, nav a:focus-visible { background: #253b55; }
 
 .map-panel { position: sticky; top: .75rem; }
 .map-dataset { display: inline-flex; padding: .2rem .4rem; border-radius: 4px; background: #fff5df; color: #6e500e; font-size: .74rem; }
-.map-inspect-link { margin-left: auto; font-size: .85rem; }
 .map-frame { position: relative; isolation: isolate; min-height: 420px; height: clamp(420px, 64dvh, 760px); background: #e9edf0; border-block: 1px solid var(--line); }
 .map-frame > .map-canvas { position: absolute; inset: 0; }
 .map-frame .maplibregl-ctrl-top-right .maplibregl-ctrl { margin: 12px 12px 0 0; }
@@ -111,11 +109,9 @@ td, tbody th { padding: .56rem .43rem; border-top: 1px solid var(--line); }
 .score-cell { display: flex; align-items: center; gap: .32rem; font-weight: 700; }
 .ranking-foot { padding: .54rem .85rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .78rem; }
 
-.inspector-name { margin: .17rem 0 0; color: var(--accent); font-size: .9rem; font-weight: 700; }
 .icon-button { display: inline-grid; place-items: center; min-width: 2.1rem; min-height: 2.1rem; padding: .2rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); }
 .icon-button:hover { background: var(--soft); }
 .close-inspector { margin-inline-start: auto; }
-.inspector-empty { margin: 0; padding: 0 .85rem .85rem; color: var(--muted); line-height: 1.4; font-size: .9rem; }
 .inspector-hero { padding: .7rem .85rem .74rem; background: #eff4f9; border-block: 1px solid var(--line); }
 .priority-label { display: inline-flex; align-items: center; gap: .42rem; font-size: .84rem; font-weight: 720; }
 .inspector-metrics { display: grid; grid-template-columns: 1.12fr .85fr 1fr; margin: .54rem 0 0; }
@@ -126,9 +122,9 @@ td, tbody th { padding: .56rem .43rem; border-top: 1px solid var(--line); }
 .insufficient-message { margin: .52rem 0 0; color: var(--muted); font-size: .85rem; }
 .inspector-section { padding: .7rem .85rem .79rem; }
 .inspector-section + .inspector-section { border-top: 1px solid var(--line); }
-.inspector-section h4 { margin: 0 0 .4rem; font-size: .94rem; letter-spacing: -.015em; }
+.inspector-section h3 { margin: 0 0 .4rem; font-size: .94rem; letter-spacing: -.015em; }
 .analytics-heading { display: flex; align-items: center; gap: .4rem; margin-bottom: .33rem; }
-.analytics-heading h4 { margin: 0; }
+.analytics-heading h3 { margin: 0; }
 .indicator-list { margin: 0; font-size: .86rem; }
 .indicator-list > div { display: flex; justify-content: space-between; align-items: start; gap: .55rem; padding: .31rem 0; }
 .indicator-list > div + div { border-top: 1px solid #e9edf3; }
@@ -183,7 +179,6 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 5px; }
   nav svg { width: 14px; }
   .brand { gap: .35rem; font-size: .9rem; }
   .brand-icon { width: 1.8rem; height: 1.8rem; }
-  .public-badge { gap: .25rem; }
   .container { padding-top: 1rem; }
   .workspace-heading { display: block; margin-bottom: .75rem; }
   .workspace-heading p { font-size: .9rem; }

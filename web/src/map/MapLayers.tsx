@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useLayoutEffect, useRef, useState } from 'react'
 import { Layers3 } from 'lucide-react'
 import type { Map as MapLibreMap, SourceSpecification } from 'maplibre-gl'
 import type { Feature, FeatureCollection, Geometry } from 'geojson'
@@ -173,7 +173,7 @@ function LayerToggle({ layer, map, view, wardId, realMap, authority, onUnauthori
   </div>
 }
 
-export default memo(function MapLayers({ map, wardId, realMap, authority, onUnauthorized, onHide, theme, onTheme }: {
+export default memo(function MapLayers({ map, wardId, realMap, authority, onUnauthorized, onHide, theme, onTheme, visible }: {
   map: MapLibreMap | null
   wardId: string | null
   realMap: boolean
@@ -182,18 +182,21 @@ export default memo(function MapLayers({ map, wardId, realMap, authority, onUnau
   onHide: (layer: OverlayKey) => void
   theme: 'auto' | 'street' | 'dark'
   onTheme: (theme: 'auto' | 'street' | 'dark') => void
+  visible: boolean
 }) {
   const [view, setView] = useState<Viewport | null>(null)
-  useEffect(() => {
-    if (!map) return
+  useLayoutEffect(() => {
+    if (!map || !visible) return
     const update = () => {
+      // Resizes of the hidden overview must not replace the last real viewport.
+      if (!map.getContainer().clientWidth || !map.getContainer().clientHeight) return
       const next = readViewport(map)
       setView((previous) => previous?.bbox === next.bbox && previous.zoom === next.zoom ? previous : next)
     }
     update()
     map.on('moveend', update)
     return () => { map.off('moveend', update) }
-  }, [map])
+  }, [map, visible])
 
   const shared = { map, view, wardId, realMap, authority, onUnauthorized, onHide }
   return <details className="layers-control">

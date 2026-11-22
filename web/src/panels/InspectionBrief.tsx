@@ -5,17 +5,15 @@ import type { Ward } from '../api/service'
 import type { components } from '../../types/openapi'
 import { config } from '../config'
 import { flagLabels, rankRange, scoreBand } from '../wardMetrics'
-import Modal from './Modal'
 
 type Api = components['schemas']
 type Pdf = { status: 'loading' | 'fallback' } | { status: 'ready'; url: string }
 const metric = (value: number | null | undefined, unit = '') =>
   value == null ? 'Unavailable' : value.toLocaleString('en-IN', { maximumSignificantDigits: 6 }) + unit
 
-export default function InspectionBrief({ ward, meta, onClose }: {
+export default function InspectionBrief({ ward, meta }: {
   ward: Ward
   meta?: Api['MetaResponse']
-  onClose: () => void
 }) {
   const [pdf, setPdf] = useState<Pdf>({ status: config.mock ? 'fallback' : 'loading' })
   const [cells, setCells] = useState<Api['CellProperties'][] | 'unavailable' | null>(null)
@@ -28,7 +26,7 @@ export default function InspectionBrief({ ward, meta, onClose }: {
     void getDataService().then(async (service) => {
       const cellsRequest = service.getWardCells(ward.ward_id, controller.signal).then((collection) => {
         if (!controller.signal.aborted) setCells(collection.features.map((feature) => feature.properties)
-          .filter((cell) => !cell.suppressed && cell.cell_rank_in_ward != null)
+          .filter((cell) => cell.suppressed === false && cell.cell_rank_in_ward != null)
           .sort((a, b) => (a.cell_rank_in_ward ?? 0) - (b.cell_rank_in_ward ?? 0)))
       }).catch(() => { if (!controller.signal.aborted) setCells('unavailable') })
       if (config.mock) { await cellsRequest; return }
@@ -56,7 +54,7 @@ export default function InspectionBrief({ ward, meta, onClose }: {
   }, [ward.ward_id])
 
   return (
-    <Modal title="Ward inspection brief" onClose={onClose} className="brief-dialog">
+    <section className="panel brief-view" aria-label="Ward inspection brief">
       <div className="brief-toolbar">
         <span role="status">{config.mock ? 'Synthetic mock · print preview' : pdf.status === 'ready' ? 'API PDF available' : pdf.status === 'loading' ? 'Checking for API PDF…' : 'API PDF unavailable · browser print fallback'}</span>
         {pdf.status === 'ready' && <a className="primary-button" href={pdf.url} download={`ward-${ward.ward_id}-inspection.pdf`}><Download size={15} /> Download PDF</a>}
@@ -99,6 +97,6 @@ export default function InspectionBrief({ ward, meta, onClose }: {
           <p>Data vintage {meta?.data_vintage ?? 'unavailable'} · Engine {meta?.engine_version ?? 'unavailable'} · C2 {meta?.contract_versions.C2 ?? 'unavailable'}</p>
         </footer>
       </article>
-    </Modal>
+    </section>
   )
 }

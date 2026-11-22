@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { addProtocol, LngLatBounds, Map as MapLibreMap, NavigationControl, removeProtocol, ScaleControl, setWorkerUrl } from 'maplibre-gl'
 import type { MapMouseEvent, SourceSpecification } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -36,16 +36,22 @@ function hitTest(map: MapLibreMap, event: MapMouseEvent) {
   const layers = [...overlayKeys.flatMap(overlayHitLayers), wardFill].filter((id) => map.getLayer(id))
   if (!layers.length) return {}
   const hits = map.queryRenderedFeatures(event.point, { layers })
+  const ward = hits.find((hit) => hit.layer.id === wardFill)?.properties
   for (const key of overlayKeys) {
     const ids = overlayHitLayers(key)
     const hit = hits.find((item) => ids.includes(item.layer.id))
     const feature = hit && describeFeature(key, hit.properties)
-    if (feature) return { feature }
+    if (hit && feature) {
+      const wardId = hit.properties.ward_id ?? ward?.ward_id
+      if (typeof wardId === 'string') feature.wardId = wardId
+      return { feature, ward }
+    }
   }
-  return { ward: hits.find((hit) => hit.layer.id === wardFill)?.properties }
+  return { ward }
 }
 
-export default function MapWorkspace({ geometry, wardTiles, realMap, selection, onSelect, authority, onUnauthorized, appearance }: {
+export default function MapWorkspace({ geometry, wardTiles, realMap, selection, onSelect, authority, onUnauthorized, appearance,
+  visible = true, onFeatureChange }: {
   geometry: WardGeometry | null
   wardTiles?: string
   realMap: boolean
@@ -54,6 +60,8 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
   authority: AuthoritySession | null
   onUnauthorized: () => void
   appearance: 'light' | 'dark'
+  visible?: boolean
+  onFeatureChange?: (feature: MapFeature | null) => void
 }) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibreMap | null>(null)
@@ -70,7 +78,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
   const [feature, setFeature] = useState<MapFeature | null>(null)
   const [mapError, setMapError] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
-  const { active, preferred, change, coverage } = useCityPerspective(layerMap, mapError)
+  const { active, preferred, change, coverage } = useCityPerspective(layerMap, mapError, visible)
   const [basemap, setBasemap] = useState<BasemapStatus>('loading')
   const [hover, setHover] = useState<Hover | null>(null)
   const [focusMiss, setFocusMiss] = useState<string | null>(null)
@@ -82,6 +90,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
     if (!hasGeometry || !element) return
     const controller = new AbortController()
     let ownedMap: MapLibreMap | undefined
+    let resizeObserver: ResizeObserver | undefined
     let hoverFrame = 0
     let lastPointer: MapMouseEvent | null = null
     let hasProtocol = false
@@ -129,11 +138,12 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
         for (const feature of geometry.features) addBounds(bounds, feature.geometry)
       } else return
 
+      const fitBoundsOptions = { padding: 55, maxZoom: 14, duration: 0 }
       const current = new MapLibreMap({
         container: element,
         style: neutralBasemap(initialTheme.current),
         bounds: bounds.isEmpty() ? undefined : bounds,
-        fitBoundsOptions: { padding: 55, maxZoom: 14, duration: 0 },
+        fitBoundsOptions,
         attributionControl: { compact: true },
         maxZoom: 19,
         renderWorldCopies: false,
@@ -141,10 +151,25 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
         touchPitch: false,
         maxPitch: 58,
         cooperativeGestures: true,
+        trackResize: false,
       })
       ownedMap = current
       map.current = current
       overview.current = bounds
+      let width = element.clientWidth
+      let height = element.clientHeight
+      resizeObserver = new ResizeObserver(() => {
+        const nextWidth = element.clientWidth
+        const nextHeight = element.clientHeight
+        if (!nextWidth || !nextHeight || (width === nextWidth && height === nextHeight)) return
+        const firstVisibleSize = !width || !height
+        width = nextWidth
+        height = nextHeight
+        current.resize()
+        if (firstVisibleSize && !bounds.isEmpty()) current.fitBounds(bounds, fitBoundsOptions)
+        current.redraw()
+      })
+      resizeObserver.observe(element)
       current.addControl(new NavigationControl({ showCompass: true }), 'top-right')
       current.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left')
 
@@ -202,8 +227,10 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
       current.on('click', (event) => {
         const { feature, ward } = hitTest(current, event)
         clearHover()
-        if (feature) setFeature(feature)
-        else if (typeof ward?.ward_id === 'string' && (!realMap || isDelhiWardId(ward.ward_id))) {
+        if (feature) {
+          setFeature(feature)
+          if (feature.wardId && (!realMap || isDelhiWardId(feature.wardId))) onSelect(feature.wardId, 'map')
+        } else if (typeof ward?.ward_id === 'string' && (!realMap || isDelhiWardId(ward.ward_id))) {
           setFeature(null)
           onSelect(ward.ward_id, 'map')
         }
@@ -214,6 +241,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
     return () => {
       controller.abort()
       cancelAnimationFrame(hoverFrame)
+      resizeObserver?.disconnect()
       ownedMap?.remove()
       map.current = null
       appliedStyle.current = null
@@ -253,6 +281,10 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
   }, [])
   const visibleFeature = feature && (authority || feature.layer === 'cells' || (config.mock && feature.layer === 'points')) ? feature : null
   useEffect(() => {
+    onFeatureChange?.(mapError ? null : visibleFeature)
+    return () => onFeatureChange?.(null)
+  }, [mapError, onFeatureChange, visibleFeature])
+  useEffect(() => {
     if (!authority) {
       hideFeature('buildings')
       if (!config.mock) hideFeature('points')
@@ -273,7 +305,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
 
   useEffect(() => {
     const current = layerMap
-    if (!current) return
+    if (!current || !visible) return
     for (const layer of selectionLayers) current.setFilter(layer, wardFilter(selection?.id ?? null))
     if (selection?.origin !== 'ranking' || lastFocused.current === selection) return
 
@@ -302,7 +334,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
       clearTimeout(timeout)
       current.off('idle', finish)
     }
-  }, [geometry, layerMap, selection, tiles])
+  }, [geometry, layerMap, selection, tiles, visible])
 
   const resetView = () => {
     const bounds = overview.current
@@ -326,7 +358,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
         data-perspective={shown3d ? '3d' : '2d'} data-basemap={theme} />
       {mapError && geometry && <WardPlan geometry={geometry} synthetic={!realMap} activeId={selection?.id} onSelect={(id) => onSelect(id, 'map')} />}
       {hasGeometry && !mapError && <MapLayers map={layerMap} wardId={selection?.id ?? null} authority={authority} onUnauthorized={onUnauthorized}
-        realMap={realMap} theme={override} onTheme={setOverride} onHide={hideFeature} />}
+        realMap={realMap} theme={override} onTheme={setOverride} onHide={hideFeature} visible={visible} />}
       {!hasGeometry && <p className="map-message">No ward boundaries are available. Ward summaries are accessible from the rankings.</p>}
       {hasGeometry && !instance && !mapError && <p className="map-message" role="status">Loading ward map…</p>}
       {mapError && <div className="map-message plan-message" role="alert">{archiveError ?? (geometry ?

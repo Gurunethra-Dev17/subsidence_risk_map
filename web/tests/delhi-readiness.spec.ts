@@ -142,7 +142,7 @@ test('approved URL loads ward geometry, shows missing scores, and falls back to 
 
 test('Methodology explains the documented engine scenario and its limits', async ({ page }) => {
   await page.goto('/')
-  await page.getByRole('button', { name: 'Methodology' }).click()
+  await page.getByRole('link', { name: 'Methods & Evidence' }).click()
   await expect(page.getByRole('heading', { name: 'From radar observations to building indicators' })).toBeVisible()
   await expect(page.getByText(/0\.0002 per year.*0\.002 over 10 years/)).toBeVisible()
   await expect(page.getByText(/nine variants test parameter sensitivity/)).toBeVisible()

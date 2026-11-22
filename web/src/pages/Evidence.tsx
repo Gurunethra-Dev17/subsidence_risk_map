@@ -2,6 +2,7 @@ import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import type { components } from '../../types/openapi'
 import { isSyntheticDataset } from '../api/service'
 import ChartFrame from '../panels/ChartFrame'
+import { viewHref } from './workspaceNavigation'
 
 type Api = components['schemas']
 const indicators = [
@@ -126,19 +127,36 @@ function Validation({ data }: { data: Api['ValidationSummary'] }) {
   </>
 }
 
-export default function Evidence({ page, meta, validation, validationError, retry }: {
-  page: 'methods' | 'validation'
+export default function Evidence({ page, meta, validation, validationError, retry, mapAttribution }: {
+  page: 'methods' | 'validation' | 'limitations'
   meta?: Api['MetaResponse']
   validation?: Api['ValidationSummary']
   validationError?: string
   retry: () => void
+  mapAttribution?: string
 }) {
   return <div className="evidence-page">
-    <header><h1>{page === 'methods' ? 'Methodology' : 'Validation'}</h1>
+    <header><h1>Methods &amp; Evidence</h1>
       <p>{isSyntheticDataset(meta) ? 'Synthetic demo data · counts and settings demonstrate the workflow.' : 'Contract-backed city evidence and coverage.'}</p>
     </header>
-    {page === 'methods' ? <Methodology meta={meta} /> : validation ? <Validation data={validation} /> : validationError
+    <nav className="section-nav" aria-label="Evidence sections">
+      {(['methods', 'validation', 'limitations'] as const).map((section) =>
+        <a key={section} href={viewHref(section)} aria-current={page === section ? 'page' : undefined}>
+          {{ methods: 'Methodology', validation: 'Validation', limitations: 'Limitations' }[section]}
+        </a>)}
+    </nav>
+    {page === 'methods' && <><Methodology meta={meta} />
+      {mapAttribution && <section className="evidence-section"><h2>Map attribution</h2><p>{mapAttribution}</p></section>}
+    </>}
+    {page === 'validation' && (validation ? <Validation data={validation} /> : validationError
       ? <section className="evidence-section" role="alert"><p>Validation unavailable. {validationError}</p><button type="button" className="text-button" onClick={retry}>Try again</button></section>
-      : <p role="status">Loading validation evidence…</p>}
+      : <p role="status">Loading validation evidence…</p>)}
+    {page === 'limitations' && <section className="evidence-section">
+      <h2>Scientific limitations</h2>
+      <p>The Inspection Index is a city-relative screening tool for prioritising field inspections. Building safety and structural condition require separate evidence.</p>
+      <p>The 10-year distortion scenario assumes constant ground-motion rates. Evaluating damage or failure probabilities requires separate evidence.</p>
+      <p>Sparse observations leave distortion indicators unavailable. Insufficient ward coverage leaves the score and rank unavailable, and small cell samples are suppressed.</p>
+      <p>Rank ranges describe sensitivity to indicator weights. See <a href={viewHref('validation')}>validation results</a> for robustness and coverage of the available checks.</p>
+    </section>}
   </div>
 }

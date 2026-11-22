@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, BookOpen, ChartNoAxesCombined, FlaskConical, LocateFixed, Map as MapIcon, Moon, ScanLine, Sun } from 'lucide-react'
+import { Activity, BookOpen, FileText, FlaskConical, LocateFixed, Map as MapIcon, Moon, ScanLine, Sun } from 'lucide-react'
 import { getDataService, getSyntheticWardGeometry, isSyntheticDataset } from '../api/service'
 import type { DataService, Ward } from '../api/service'
 import { c5Attribution, delhiWardCount, hasDelhiWardIds, loadDelhiWardGeometry } from '../api/delhiMap'
@@ -7,7 +7,9 @@ import { config } from '../config'
 import Rankings from '../panels/Rankings'
 import AuthorityAccess from '../modes/AuthorityAccess'
 import type { AuthoritySession } from '../api/authority'
-import { formatNumber, insufficientBand, scoreBands, unavailableBand } from '../wardMetrics'
+import type { MapFeature } from '../map/overlayLayers'
+import { formatNumber, insufficientBand, scoreBand, scoreBands, unavailableBand } from '../wardMetrics'
+import { useWorkspaceView, viewHref } from './workspaceNavigation'
 
 const MapWorkspace = lazy(() => import('../map/MapWorkspace'))
 const Evidence = lazy(() => import('./Evidence'))
@@ -18,23 +20,24 @@ type Resource<T> = { status: 'loading' } | { status: 'ready'; data: T } | { stat
 type Selection = { id: string; origin: 'map' | 'ranking' }
 
 function useResource<T>(read: (service: DataService, signal: AbortSignal) => Promise<T>, enabled = true) {
-  const [state, setState] = useState<Resource<T>>({ status: 'loading' })
+  const [result, setResult] = useState<{ read: typeof read; state: Resource<T> } | null>(null)
+  const state = result?.read === read ? result.state : { status: 'loading' as const }
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     if (!enabled) return
     const controller = new AbortController()
     void getDataService().then((service) => read(service, controller.signal)).then(
-      (data) => { if (!controller.signal.aborted) setState({ status: 'ready', data }) },
+      (data) => { if (!controller.signal.aborted) setResult({ read, state: { status: 'ready', data } }) },
       (error: unknown) => {
         if (!controller.signal.aborted) {
-          setState({ status: 'error', error: error instanceof Error ? error.message : 'An unexpected error occurred.' })
+          setResult({ read, state: { status: 'error', error: error instanceof Error ? error.message : 'An unexpected error occurred.' } })
         }
       },
     )
     return () => controller.abort()
   }, [attempt, enabled, read])
   const retry = () => {
-    setState({ status: 'loading' })
+    setResult(null)
     setAttempt((count) => count + 1)
   }
   return { state, retry, attempt }
@@ -77,6 +80,23 @@ function FailedState({ label, error, retry }: { label: string; error: string; re
 }
 
 export default function Dashboard() {
+  const page = useWorkspaceView()
+  const isOverview = page === 'map'
+  const isEvidence = page === 'methods' || page === 'validation' || page === 'limitations'
+  const [mapOpened, setMapOpened] = useState(isOverview)
+  const [readEvidence, setReadEvidence] = useState(page === 'validation')
+  const main = useRef<HTMLElement>(null)
+  const previousPage = useRef(page)
+  useEffect(() => {
+    if (isOverview) setMapOpened(true)
+    if (page === 'validation') setReadEvidence(true)
+    if (previousPage.current !== page) {
+      previousPage.current = page
+      main.current?.focus()
+      window.scrollTo(0, 0)
+    }
+  }, [isOverview, page])
+
   const meta = useResource(loadMeta)
   const health = useResource(loadHealth, !config.mock)
   const wards = useResource(listAllWards)
@@ -89,9 +109,8 @@ export default function Dashboard() {
   const realDatasetMatches = useMemo(() => realMetadataMatches && Boolean(entries && hasDelhiWardIds(entries.map((ward) => ward.ward_id))),
     [entries, realMetadataMatches])
   const useRealGeoJson = realDatasetMatches && Boolean(config.wardGeoJson)
-  const fixture = useResource(getSyntheticWardGeometry, useFixtureBoundaries)
-  const boundaries = useResource(loadRealBoundaries, useRealGeoJson)
-  const [readEvidence, setReadEvidence] = useState(false)
+  const fixture = useResource(getSyntheticWardGeometry, useFixtureBoundaries && (mapOpened || isOverview))
+  const boundaries = useResource(loadRealBoundaries, useRealGeoJson && (mapOpened || isOverview))
   const validation = useResource(loadValidation, readEvidence)
   const [appearance, setAppearance] = useState<'light' | 'dark'>(() => {
     try { return localStorage.getItem('map-appearance') === 'dark' ? 'dark' : 'light' }
@@ -102,11 +121,11 @@ export default function Dashboard() {
     try { localStorage.setItem('map-appearance', appearance) } catch { /* Storage is optional. */ }
   }, [appearance])
   const [selection, setSelection] = useState<Selection | null>(null)
-  const [page, setPage] = useState<'map' | 'methods' | 'validation'>('map')
+  const selectedId = selection?.id
+  const loadWard = useCallback((service: DataService, signal: AbortSignal) => service.getWard(selectedId ?? '', signal), [selectedId])
+  const details = useResource(loadWard, selectedId !== undefined)
   const [rankingsCollapsed, setRankingsCollapsed] = useState(false)
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
-  const [brief, setBrief] = useState<Ward | null>(null)
-  const [inspectorOpened, setInspectorOpened] = useState(false)
+  const [mapFeature, setMapFeature] = useState<MapFeature | null>(null)
   const [authority, setAuthority] = useState<AuthoritySession | null>(null)
   const [authorityNotice, setAuthorityNotice] = useState('')
   const session = useRef<AuthoritySession | null>(null)
@@ -114,6 +133,7 @@ export default function Dashboard() {
     session.current?.close()
     session.current = null
     setAuthority(null)
+    setMapFeature((feature) => feature?.layer === 'buildings' || (!config.mock && feature?.layer === 'points') ? null : feature)
     setAuthorityNotice(notice)
   }, [])
   const signIn = (next: AuthoritySession) => {
@@ -132,8 +152,6 @@ export default function Dashboard() {
 
   const onSelect = useCallback((id: string, origin: Selection['origin']) => {
     setSelection({ id, origin })
-    setInspectorOpened(true)
-    setInspectorCollapsed(false)
   }, [])
   const fixtureGeometry = useFixtureBoundaries && fixture.state.status === 'ready' ? fixture.state.data : null
   const realGeometry = useRealGeoJson && boundaries.state.status === 'ready' ? boundaries.state.data : null
@@ -170,6 +188,9 @@ export default function Dashboard() {
   const fixtureMismatch = Boolean(fixtureGeometry && entries && !mapGeometry)
   const renderRealMap = realDatasetMatches && Boolean(mapGeometry || wardTiles)
   const selectedWard = entries?.find((ward) => ward.ward_id === selection?.id)
+  const selectedDetails = details.state.status === 'ready' ? details.state.data : undefined
+  const inspectorFeature = selectedId && mapFeature?.wardId === selectedId &&
+    (mapFeature.layer === 'cells' || authority || (config.mock && mapFeature.layer === 'points')) ? mapFeature : null
   const coverage = useMemo(() => {
     if (!entries || !city || entries.length !== city.n_wards) return null
     const totals = entries.reduce((sum, ward) => ({
@@ -181,16 +202,17 @@ export default function Dashboard() {
 
   return (
     <>
-      <a className="skip-link" href="#main">Skip to workspace</a>
+      <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); main.current?.focus() }}>Skip to workspace</a>
       <header className="site-header">
         <div className="header-inner">
-          <a className="brand" href="#main" onClick={() => setPage('map')}><span className="brand-icon"><LocateFixed size={22} /></span><span>Subsidence Risk Map<small>Urban ground-motion monitoring</small></span></a>
-          <nav aria-label="Workspace">
-            <button type="button" aria-current={page === 'map' ? 'page' : undefined} onClick={() => setPage('map')}><MapIcon size={16} /> Workspace</button>
-            <button type="button" aria-current={page === 'methods' ? 'page' : undefined} onClick={() => setPage('methods')}><BookOpen size={16} /> Methodology</button>
-            <button type="button" aria-current={page === 'validation' ? 'page' : undefined} onClick={() => { setReadEvidence(true); setPage('validation') }}><ChartNoAxesCombined size={16} /> Validation</button>
+          <a className="brand" href={viewHref('map')}><span className="brand-icon"><LocateFixed size={22} /></span><span>Subsidence Risk Map<small>Urban ground-motion monitoring</small></span></a>
+          <nav className="primary-nav" aria-label="Workspace">
+            <a href={viewHref('map')} aria-current={isOverview ? 'page' : undefined}><MapIcon size={16} /> Overview Map</a>
+            <a href={viewHref('inspector')} aria-current={page === 'inspector' ? 'page' : undefined}><ScanLine size={16} /> Ward Inspector</a>
+            <a href={viewHref('brief')} aria-current={page === 'brief' ? 'page' : undefined}><FileText size={16} /> Inspection Brief</a>
           </nav>
           <div className="header-tools">
+            <a className="header-button evidence-link" href={viewHref('methods')} aria-current={isEvidence ? 'location' : undefined}><BookOpen size={15} /> Methods &amp; Evidence</a>
             <button type="button" className="header-button appearance-control" aria-label={appearance === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'}
               onClick={() => setAppearance((value) => value === 'dark' ? 'light' : 'dark')}>{appearance === 'dark' ? <Sun size={17} /> : <Moon size={17} />}</button>
             <AuthorityAccess session={authority} signIn={signIn} signOut={() => signOut()} />
@@ -198,9 +220,9 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main id="main" className={'container app-main' + (page === 'map' ? ' map-page' : '')} tabIndex={-1}>
+      <main id="main" ref={main} className={'container app-main' + (isOverview ? ' map-page' : '')} tabIndex={-1}>
         {authorityNotice && <div className="session-notice" role="status">{authorityNotice}</div>}
-        <div className="workspace-view" hidden={page !== 'map'}>
+        {(mapOpened || isOverview) && <div className="workspace-view" hidden={!isOverview}>
         <div className="workspace-heading">
           <div>
             <h1><Activity size={21} /> {city?.city ?? 'City'} monitoring</h1>
@@ -227,7 +249,6 @@ export default function Dashboard() {
               <h2 id="map-title">Risk atlas</h2>
               {mapGeometry && <span className="map-dataset">{renderRealMap ? 'Delhi wards · GeoJSON' : 'Synthetic wards'}</span>}
               {wardTiles && <span className="map-dataset">Delhi wards · PMTiles</span>}
-              {selection && <a className="map-inspect-link" href="#inspector">Ward details</a>}
             </div>
             {realSourceNotice && <p className="panel-state" role="alert">{realSourceNotice}</p>}
             {realGeoJsonError && wardTiles && <p className="panel-state" role="status">Ward GeoJSON unavailable · using configured ward PMTiles.</p>}
@@ -242,12 +263,12 @@ export default function Dashboard() {
                 <Suspense fallback={<p className="map-message" role="status">Loading map…</p>}>
                   <MapWorkspace key={`${wards.attempt}:${fixture.attempt}:${boundaries.attempt}:${wardTiles ?? ''}`}
                     geometry={mapGeometry} wardTiles={wardTiles} realMap={renderRealMap} selection={selection} onSelect={onSelect} appearance={appearance}
-                    authority={authority} onUnauthorized={unauthorized} />
+                    visible={isOverview} onFeatureChange={setMapFeature} authority={authority} onUnauthorized={unauthorized} />
                 </Suspense>
               )}
             </div>
             <MapLegend />
-            <p className="map-caption">City-relative inspection priority <button type="button" className="text-button" onClick={() => setPage('methods')}>How to read the index</button></p>
+            <p className="map-caption">City-relative inspection priority <a className="text-button" href={viewHref('methods')}>How to read the index</a></p>
             {renderRealMap && <p className="map-caption">{c5Attribution}{config.delhiAttribution && ` · ${config.delhiAttribution}`}</p>}
           </section>
 
@@ -260,23 +281,66 @@ export default function Dashboard() {
                   : <FailedState label="Ward rankings" error={wards.state.error} retry={wards.retry} />}
               </section>
             )}
-            {inspectorOpened ? <Suspense fallback={<p className="panel-state" role="status">Loading ward inspector…</p>}>
-              <WardInspector id={selection?.id ?? null} name={selectedWard?.ward_name} rankedCount={city?.n_ranked} onClose={() => setSelection(null)}
-                collapsed={inspectorCollapsed} onCollapse={() => setInspectorCollapsed((value) => !value)} onBrief={setBrief} />
-            </Suspense> : <section className="panel inspector empty-inspector" id="inspector" tabIndex={-1}>
-              <div className="panel-heading"><span className="section-icon"><ScanLine size={17} /></span><h2>Ward inspector</h2></div>
-              <p><strong>Awaiting ward selection</strong><span>Choose a boundary or ranking row to review evidence and prepare an inspection brief.</span></p>
-            </section>}
+            <section className="panel ward-summary" aria-labelledby="selected-ward-title">
+              <div className="panel-heading"><span className="section-icon"><ScanLine size={17} /></span><h2 id="selected-ward-title">Selected ward</h2></div>
+              {selectedId ? <>
+                <div className="ward-summary-content">
+                  <div><strong>{selectedWard?.ward_name ?? selectedId}</strong> <span className="muted-copy">{selectedId}</span></div>
+                  {selectedWard && <span className="muted-copy">{scoreBand(selectedWard.status, selectedWard.score).label}
+                    {selectedWard.score != null && ` · ${formatNumber(selectedWard.score)}/100`}
+                    {selectedWard.rank != null && ` · Rank #${formatNumber(selectedWard.rank)}`}</span>}
+                  <div className="view-actions">
+                    <a className="secondary-button" href={viewHref('inspector')}>Open Ward Inspector</a>
+                    <a className="text-button" href={viewHref('brief')}>Open Inspection Brief</a>
+                    <button type="button" className="text-button" onClick={() => setSelection(null)}>Clear ward selection</button>
+                  </div>
+                </div>
+              </> : <p className="panel-state">Choose a ward on the map or in the rankings.</p>}
+            </section>
           </aside>
         </div>
-        </div>
+        </div>}
 
-        {page !== 'map' && <Suspense fallback={<p role="status">Loading evidence…</p>}>
+        {(page === 'inspector' || page === 'brief') && <div className="detail-view">
+          <header className="detail-heading">
+            <div>
+              <h1>{page === 'inspector' ? 'Ward Inspector' : 'Inspection Brief'}</h1>
+              <p className="source-status"><strong>{synthetic ? 'Synthetic data preview' : 'Public ward summary'}</strong>{city?.data_vintage && <span>{city.data_vintage}</span>}</p>
+            </div>
+            <div className="view-actions">
+              <a className="secondary-button" href={viewHref('map')}>Back to Overview Map</a>
+              <a className="secondary-button" href={viewHref(page === 'inspector' ? 'brief' : 'inspector')}>
+                {page === 'inspector' ? 'Open Inspection Brief' : 'Open Ward Inspector'}
+              </a>
+            </div>
+          </header>
+          <div className="ward-context panel">
+            <label>Ward <select disabled={!entries?.length} value={selectedId ?? ''} onChange={(event) => {
+              if (event.target.value) onSelect(event.target.value, 'ranking')
+              else setSelection(null)
+            }}>
+              <option value="">Choose a ward</option>
+              {entries?.map((ward) => <option key={ward.ward_id} value={ward.ward_id}>{ward.ward_name} · {ward.ward_id}</option>)}
+            </select></label>
+            {wards.state.status === 'error' ? <FailedState label="Ward list" error={wards.state.error} retry={wards.retry} />
+              : wards.state.status === 'loading' ? <p className="muted-copy" role="status">Loading ward list…</p>
+                : entries?.length === 0 ? <p className="muted-copy">No ward summaries are available.</p> : null}
+          </div>
+          {!selectedId ? <section className="panel detail-empty"><h2>Select a ward</h2><p>Choose a ward above or return to the overview map.</p></section>
+            : details.state.status === 'error' ? <FailedState label="Ward details" error={details.state.error} retry={details.retry} />
+              : !selectedDetails ? <p className="panel-state" role="status">Loading ward details…</p>
+                : <Suspense fallback={<p className="panel-state" role="status">{page === 'inspector' ? 'Loading ward inspector…' : 'Loading inspection brief…'}</p>}>
+                  {page === 'inspector' ? <WardInspector ward={selectedDetails} rankedCount={city?.n_ranked} feature={inspectorFeature} />
+                    : <InspectionBrief key={selectedId} ward={selectedDetails} meta={city} />}
+                </Suspense>}
+        </div>}
+
+        {isEvidence && <Suspense fallback={<p role="status">Loading evidence…</p>}>
           <Evidence page={page} meta={city} validation={validation.state.status === 'ready' ? validation.state.data : undefined}
-            validationError={validation.state.status === 'error' ? validation.state.error : undefined} retry={validation.retry} />
+            validationError={validation.state.status === 'error' ? validation.state.error : undefined} retry={validation.retry}
+            mapAttribution={realDatasetMatches ? [c5Attribution, config.delhiAttribution].filter(Boolean).join(' · ') : undefined} />
         </Suspense>}
       </main>
-      {brief && <Suspense fallback={null}><InspectionBrief ward={brief} meta={city} onClose={() => setBrief(null)} /></Suspense>}
     </>
   )
 }

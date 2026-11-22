@@ -45,6 +45,12 @@ test('API errors can retry and rejected credentials leave public mode active', a
   expect(requests.map(({ supplied }) => supplied)).toEqual([true])
   await page.keyboard.press('Escape')
   await expect(page.getByText('Public mode', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Switch to dark appearance' }).click()
+  await page.getByRole('link', { name: 'Ward Inspector', exact: true }).click()
+  const ward = page.getByRole('combobox', { name: 'Ward', exact: true })
+  await expect(ward).toBeDisabled()
+  await expect(ward).toHaveCSS('color-scheme', 'dark')
+  await expect(ward).toHaveCSS('opacity', '1')
 })
 
 test('verified transport grants a memory-only session, and logout revokes it', async ({ page }) => {
@@ -52,14 +58,19 @@ test('verified transport grants a memory-only session, and logout revokes it', a
   expect(requests).toHaveLength(0)
   await signIn(page)
   await expect(page.getByText('Authority mode', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'Ward Inspector', exact: true }).click()
+  await expect(page.getByText('Authority mode', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page.getByText('Public mode', { exact: true })).toBeVisible()
   expect(requests.map(({ supplied }) => supplied)).toEqual([true])
   expect(requests.every(({ url }) => !url.includes(credential))).toBe(true)
   expect(await page.evaluate((secret) => JSON.stringify([localStorage, sessionStorage]).includes(secret), credential)).toBe(false)
+  await signIn(page)
+  await expect(page.getByText('Authority mode', { exact: true })).toBeVisible()
   await page.reload()
+  await expect(page.getByRole('heading', { name: 'Ward Inspector' })).toBeVisible()
   await expect(page.getByText('Public mode', { exact: true })).toBeVisible()
-  expect(requests).toHaveLength(1)
+  expect(requests.map(({ supplied }) => supplied)).toEqual([true, true])
 })
 
 test('authority expires and the page returns to public mode', async ({ page }) => {

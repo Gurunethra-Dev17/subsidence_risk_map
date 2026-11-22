@@ -50,8 +50,8 @@ export default function AuthorityAccess({ session, signIn, signOut }: {
   }
 
   return (
-    <div className="mode-switch">
-      <span className={'public-badge' + (session ? ' mode-authority' : '')}><ShieldCheck size={15} />{session ? 'Authority mode' : 'Public mode'}</span>
+    <div className="authority-access">
+      <span className={'access-status' + (session ? ' access-verified' : '')}>{session && <ShieldCheck size={14} />}{session ? 'Authority mode' : 'Public mode'}</span>
       {session
         ? <button className="header-button" type="button" onClick={signOut}>Sign out</button>
         : <button className="header-button" type="button" onClick={() => setOpen(true)}><LockKeyhole size={14} /> Authority access</button>}

@@ -44,6 +44,11 @@ test('height-enabled vector tiles render in 3D and switching preserves ward sele
   await page.getByText('Layers', { exact: true }).click()
   await expect(page.getByRole('checkbox', { name: /Grid cells/ })).toBeChecked()
   await expect(page.getByRole('checkbox', { name: /^Buildings/ })).toHaveCount(0)
+  await page.getByRole('link', { name: 'Open Ward Inspector' }).click()
+  await expect(page.getByRole('heading', { name: 'Demo North' })).toBeVisible()
+  await page.getByRole('link', { name: 'Back to Overview Map' }).click()
+  await expect(map).toHaveAttribute('data-perspective', '3d')
+  await expect(page.getByRole('button', { name: 'Rotate map left' })).toBeVisible()
 })
 
 test('without WebGL the published ward geometries remain selectable from a keyboard', async ({ page }) => {

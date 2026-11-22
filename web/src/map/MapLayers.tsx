@@ -1,6 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Layers3 } from 'lucide-react'
-import { addProtocol, removeProtocol } from 'maplibre-gl'
 import type { Map as MapLibreMap, SourceSpecification } from 'maplibre-gl'
 import type { Feature, FeatureCollection, Geometry } from 'geojson'
 import { getDataService } from '../api/service'
@@ -11,7 +10,6 @@ import { makeOverlayLayers, overlayHitLayers, overlayLayerId, overlayLegends, ov
 import type { OverlayKey } from './overlayLayers'
 import { selectedLine } from './wardLayers'
 
-const PRIVATE_PROTOCOL = 'wardprivate'
 type Viewport = { zoom: number; bbox: string }
 type LayerStatus = 'off' | 'zoom' | 'loading' | 'empty' | 'ready' | 'unavailable' | 'error'
 
@@ -22,11 +20,12 @@ function readViewport(map: MapLibreMap): Viewport {
   return { zoom: map.getZoom(), bbox: bbox.map((value) => value.toFixed(6)).join(',') }
 }
 
-function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHide }: {
+function LayerToggle({ layer, map, view, wardId, realMap, authority, onUnauthorized, onHide }: {
   layer: OverlayKey
   map: MapLibreMap | null
   view: Viewport | null
   wardId: string | null
+  realMap: boolean
   authority: AuthoritySession | null
   onUnauthorized: () => void
   onHide: (layer: OverlayKey) => void
@@ -38,8 +37,8 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
   const [attempt, setAttempt] = useState(0)
   const opacityRef = useRef(opacity)
   const spec = overlaySettings[layer]
-  const archive = config.mock ? '' : layer === 'cells' ? config.cellTiles : layer === 'points' ? config.pointTiles : ''
-  const buildingView = layer === 'buildings' && (!authority?.archive || fallback) ? view?.bbox : undefined
+  const archive = !realMap ? undefined : layer === 'cells' ? config.cellTiles : layer === 'points' ? config.pointTiles : undefined
+  const buildingView = layer === 'buildings' ? view?.bbox : undefined
   const cellWard = layer === 'cells' && !config.mock && (!archive || fallback) ? wardId : null
   const atZoom = Boolean(view && view.zoom >= spec.zoom)
   const session = layer === 'buildings' ? authority : null
@@ -53,41 +52,22 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
     const controller = new AbortController()
     const sourceId = overlaySourceId(layer)
     const installed: string[] = []
-    let privateProtocol = false
     let vectorSource = false
-    const protectedArchive = session?.archive && !fallback ? session.archive : undefined
-    const canFallback = !fallback && (Boolean(protectedArchive) || Boolean(archive && layer === 'cells'))
+    const canFallback = !fallback && Boolean(archive && layer === 'cells')
 
     function failed(error?: unknown) {
       if (controller.signal.aborted) return
       if (isUnauthorized(error)) { onUnauthorized(); return }
-      if (canFallback) setFallback(true)
+      if (canFallback) {
+        onHide(layer)
+        setFallback(true)
+      }
       else setStatus('error')
     }
 
     async function install(current: MapLibreMap) {
       let source: SourceSpecification
-      if (protectedArchive) {
-        const { PMTiles } = await import('pmtiles')
-        if (controller.signal.aborted) return
-        const tileArchive = new PMTiles(protectedArchive)
-        const header = await tileArchive.getHeader()
-        if (controller.signal.aborted) return
-        addProtocol(PRIVATE_PROTOCOL, async ({ url }, tileController) => {
-          if (controller.signal.aborted) return { data: new ArrayBuffer(0) }
-          const [z, x, y] = url.slice((PRIVATE_PROTOCOL + '://buildings/').length).split('/').map(Number)
-          try {
-            const data = await tileArchive.getZxy(z, x, y, AbortSignal.any([controller.signal, tileController.signal]))
-            return { data: data?.data ?? new ArrayBuffer(0) }
-          } catch (error) {
-            failed(error)
-            return { data: new ArrayBuffer(0) }
-          }
-        })
-        privateProtocol = true
-        source = { type: 'vector', tiles: [PRIVATE_PROTOCOL + '://buildings/{z}/{x}/{y}'],
-          minzoom: header.minZoom, maxzoom: header.maxZoom }
-      } else if (archive && !fallback) {
+      if (archive && !fallback) {
         source = { type: 'vector', url: 'pmtiles://' + new URL(archive, window.location.href).href }
       } else {
         let data: FeatureCollection<Geometry | null> | null = null
@@ -147,9 +127,8 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
       map.off('idle', onIdle)
       for (const id of installed.reverse()) if (map.getLayer(id)) map.removeLayer(id)
       if (map.getSource(sourceId)) map.removeSource(sourceId)
-      if (privateProtocol) removeProtocol(PRIVATE_PROTOCOL)
     }
-  }, [allowed, archive, atZoom, attempt, buildingView, cellWard, enabled, fallback, layer, map, onUnauthorized, session])
+  }, [allowed, archive, atZoom, attempt, buildingView, cellWard, enabled, fallback, layer, map, onHide, onUnauthorized, session])
 
   const changeOpacity = (value: number) => {
     setOpacity(value)
@@ -171,7 +150,7 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
     zoom: `Zoom to level ${spec.zoom} to display`,
     loading: 'Loading layer…',
     empty: 'No features returned for this view',
-    ready: layer === 'buildings' && (!session?.archive || fallback) ? 'Viewport query · up to 500 buildings' : spec.description,
+    ready: layer === 'buildings' ? 'Viewport query · up to 500 buildings' : spec.description,
     unavailable: layer === 'cells' && !config.mock && !cellWard ? 'Select a ward for API cells' : 'No source is configured for this layer',
     error: 'Layer could not be loaded',
   }[enabled ? status : 'off']
@@ -194,9 +173,10 @@ function LayerToggle({ layer, map, view, wardId, authority, onUnauthorized, onHi
   </div>
 }
 
-export default memo(function MapLayers({ map, wardId, authority, onUnauthorized, onHide, theme, onTheme }: {
+export default memo(function MapLayers({ map, wardId, realMap, authority, onUnauthorized, onHide, theme, onTheme }: {
   map: MapLibreMap | null
   wardId: string | null
+  realMap: boolean
   authority: AuthoritySession | null
   onUnauthorized: () => void
   onHide: (layer: OverlayKey) => void
@@ -215,7 +195,7 @@ export default memo(function MapLayers({ map, wardId, authority, onUnauthorized,
     return () => { map.off('moveend', update) }
   }, [map])
 
-  const shared = { map, view, wardId, authority, onUnauthorized, onHide }
+  const shared = { map, view, wardId, realMap, authority, onUnauthorized, onHide }
   return <details className="layers-control">
     <summary><Layers3 size={17} /> Layers</summary>
     <div className="layers-popover">

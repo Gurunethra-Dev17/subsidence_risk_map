@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Activity, BookOpen, ChartNoAxesCombined, FlaskConical, LocateFixed, Map as MapIcon, Moon, ScanLine, Sun } from 'lucide-react'
 import { getDataService, getSyntheticWardGeometry, isSyntheticDataset } from '../api/service'
 import type { DataService, Ward } from '../api/service'
+import { c5Attribution, delhiWardCount, hasDelhiWardIds, loadDelhiWardGeometry } from '../api/delhiMap'
 import { config } from '../config'
 import Rankings from '../panels/Rankings'
 import AuthorityAccess from '../modes/AuthorityAccess'
@@ -53,6 +54,8 @@ async function listAllWards(service: DataService, signal: AbortSignal) {
 const loadMeta = (service: DataService, signal: AbortSignal) => service.getMeta(signal)
 const loadHealth = (service: DataService, signal: AbortSignal) => service.getHealth(signal)
 const loadValidation = (service: DataService, signal: AbortSignal) => service.getValidation(signal)
+const loadRealBoundaries = (_service: DataService, signal: AbortSignal) => loadDelhiWardGeometry(config.wardGeoJson ?? '', signal)
+const hasRealMapSources = Boolean(config.wardGeoJson || config.wardTiles || config.cellTiles || config.pointTiles)
 
 function MapLegend() {
   return (
@@ -79,8 +82,15 @@ export default function Dashboard() {
   const wards = useResource(listAllWards)
   const city = meta.state.status === 'ready' ? meta.state.data : undefined
   const synthetic = isSyntheticDataset(city)
-  const useFixtureBoundaries = config.mock || (synthetic && city?.city === 'delhi' && !config.wardTiles)
-  const geometry = useResource(getSyntheticWardGeometry, useFixtureBoundaries)
+  const entries = wards.state.status === 'ready' ? wards.state.data : undefined
+  const useFixtureBoundaries = config.mock || (synthetic && city?.city === 'delhi')
+  const realMetadataMatches = !synthetic && city?.city === 'delhi' && city.n_wards === delhiWardCount &&
+    Boolean(config.delhiVintage) && city.data_vintage === config.delhiVintage
+  const realDatasetMatches = useMemo(() => realMetadataMatches && Boolean(entries && hasDelhiWardIds(entries.map((ward) => ward.ward_id))),
+    [entries, realMetadataMatches])
+  const useRealGeoJson = realDatasetMatches && Boolean(config.wardGeoJson)
+  const fixture = useResource(getSyntheticWardGeometry, useFixtureBoundaries)
+  const boundaries = useResource(loadRealBoundaries, useRealGeoJson)
   const [readEvidence, setReadEvidence] = useState(false)
   const validation = useResource(loadValidation, readEvidence)
   const [appearance, setAppearance] = useState<'light' | 'dark'>(() => {
@@ -125,28 +135,40 @@ export default function Dashboard() {
     setInspectorOpened(true)
     setInspectorCollapsed(false)
   }, [])
-  const entries = wards.state.status === 'ready' ? wards.state.data : undefined
-  const fixtureGeometry = useFixtureBoundaries && geometry.state.status === 'ready' ? geometry.state.data : null
+  const fixtureGeometry = useFixtureBoundaries && fixture.state.status === 'ready' ? fixture.state.data : null
+  const realGeometry = useRealGeoJson && boundaries.state.status === 'ready' ? boundaries.state.data : null
+  const realGeometryMismatch = useMemo(() => Boolean(realGeometry && !hasDelhiWardIds(realGeometry.features.map(({ properties }) => properties.ward_id))),
+    [realGeometry])
+  const compatibleGeometry = fixtureGeometry ?? (realGeometryMismatch ? null : realGeometry)
   const mapGeometry = useMemo(() => {
-    if (!fixtureGeometry) return null
-    if (!entries) return config.mock ? fixtureGeometry : null
+    if (!compatibleGeometry) return null
+    if (!entries) return config.mock ? compatibleGeometry : null
     const byId = new Map(entries.map((ward) => [ward.ward_id, ward]))
-    // Live data must match the bundled fixture IDs before using its boundaries.
-    if (!config.mock && (byId.size !== fixtureGeometry.features.length ||
+    if (!config.mock && fixtureGeometry && (byId.size !== fixtureGeometry.features.length ||
       !fixtureGeometry.features.every(({ properties }) => byId.has(properties.ward_id)))) return null
     return {
-      ...fixtureGeometry,
-      features: fixtureGeometry.features.map((feature) => {
+      ...compatibleGeometry,
+      features: compatibleGeometry.features.map((feature) => {
         const ward = byId.get(feature.properties.ward_id)
         return { ...feature, properties: {
-          ...feature.properties, status: ward?.status ?? null, score: ward?.score ?? null,
+          ...feature.properties, status: ward?.status, score: ward?.score ?? null,
         } }
       }),
     }
-  }, [entries, fixtureGeometry])
-  const mapPending = useFixtureBoundaries
-    ? geometry.state.status === 'loading' || wards.state.status === 'loading'
-    : !config.wardTiles && meta.state.status === 'loading'
+  }, [compatibleGeometry, entries, fixtureGeometry])
+  const realGeoJsonError = useRealGeoJson && boundaries.state.status === 'error' ? boundaries.state.error : undefined
+  const wardTiles = realDatasetMatches && (!useRealGeoJson || realGeoJsonError) ? config.wardTiles : undefined
+  const mapPending = meta.state.status === 'loading' ||
+    (useFixtureBoundaries && (fixture.state.status === 'loading' || (!config.mock && wards.state.status === 'loading'))) ||
+    (hasRealMapSources && realMetadataMatches && wards.state.status === 'loading') ||
+    (useRealGeoJson && boundaries.state.status === 'loading')
+  const realSourceNotice = !config.mock && hasRealMapSources && !mapPending && !realDatasetMatches
+    ? synthetic ? 'Configured Delhi map sources are disabled while the API serves synthetic data.'
+      : !city || (realMetadataMatches && wards.state.status === 'error') ? 'Delhi map sources are unavailable until the API dataset can be verified.'
+        : 'Dataset mismatch. Delhi map sources require the configured data vintage and all 250 matching ward IDs.'
+    : undefined
+  const fixtureMismatch = Boolean(fixtureGeometry && entries && !mapGeometry)
+  const renderRealMap = realDatasetMatches && Boolean(mapGeometry || wardTiles)
   const selectedWard = entries?.find((ward) => ward.ward_id === selection?.id)
   const coverage = useMemo(() => {
     if (!entries || !city || entries.length !== city.n_wards) return null
@@ -203,21 +225,30 @@ export default function Dashboard() {
             <div className="panel-heading">
               <span className="section-icon"><MapIcon size={18} /></span>
               <h2 id="map-title">Risk atlas</h2>
-              {mapGeometry && <span className="map-dataset">Synthetic wards</span>}
+              {mapGeometry && <span className="map-dataset">{renderRealMap ? 'Delhi wards · GeoJSON' : 'Synthetic wards'}</span>}
+              {wardTiles && <span className="map-dataset">Delhi wards · PMTiles</span>}
               {selection && <a className="map-inspect-link" href="#inspector">Ward details</a>}
             </div>
+            {realSourceNotice && <p className="panel-state" role="alert">{realSourceNotice}</p>}
+            {realGeoJsonError && wardTiles && <p className="panel-state" role="status">Ward GeoJSON unavailable · using configured ward PMTiles.</p>}
             <div className="map-frame">
-              {useFixtureBoundaries && geometry.state.status === 'error' ? (
-                <div className="map-message"><FailedState label="Ward boundaries" error={geometry.state.error} retry={geometry.retry} /></div>
+              {useFixtureBoundaries && fixture.state.status === 'error' ? (
+                <div className="map-message"><FailedState label="Ward boundaries" error={fixture.state.error} retry={fixture.retry} /></div>
+              ) : realGeoJsonError && !wardTiles ? (
+                <div className="map-message"><FailedState label="Delhi ward boundaries" error={realGeoJsonError} retry={boundaries.retry} /></div>
+              ) : realGeometryMismatch || fixtureMismatch ? (
+                <p className="map-message" role="alert">Dataset mismatch. Ward boundary IDs do not match the API rankings.</p>
               ) : mapPending ? <p className="map-message" role="status">Loading ward map…</p> : (
                 <Suspense fallback={<p className="map-message" role="status">Loading map…</p>}>
-                  <MapWorkspace key={wards.attempt + ':' + geometry.attempt} geometry={mapGeometry} selection={selection} onSelect={onSelect} appearance={appearance}
+                  <MapWorkspace key={`${wards.attempt}:${fixture.attempt}:${boundaries.attempt}:${wardTiles ?? ''}`}
+                    geometry={mapGeometry} wardTiles={wardTiles} realMap={renderRealMap} selection={selection} onSelect={onSelect} appearance={appearance}
                     authority={authority} onUnauthorized={unauthorized} />
                 </Suspense>
               )}
             </div>
             <MapLegend />
             <p className="map-caption">City-relative inspection priority <button type="button" className="text-button" onClick={() => setPage('methods')}>How to read the index</button></p>
+            {renderRealMap && <p className="map-caption">{c5Attribution}{config.delhiAttribution && ` · ${config.delhiAttribution}`}</p>}
           </section>
 
           <aside className="sidebar" aria-label="Ward analysis">

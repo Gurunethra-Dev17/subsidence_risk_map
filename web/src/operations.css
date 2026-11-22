@@ -161,8 +161,7 @@ nav button[aria-current] { border-color: #415d76; }
   nav button { padding-inline: .37rem; }
   .workspace-heading > div:first-child { gap: .3rem; }
   .city-totals div { display: flex; gap: .32rem; }
-  .map-panel .panel-heading { gap: .38rem; }
-  .map-panel .map-dataset { display: none; }
+  .map-panel .panel-heading { gap: .38rem; flex-wrap: wrap; }
   .map-inspect-link { white-space: nowrap; }
   .method-indicators { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .method-indicators > div:nth-child(3) { border-left: 0; }

@@ -29,7 +29,6 @@ export default function AuthorityAccess({ session, signIn, signOut }: {
     const form = event.currentTarget
     const password = form.elements.namedItem('token') as HTMLInputElement
     const token = password.value.trim()
-    const archive = (form.elements.namedItem('archive') as HTMLInputElement).value.trim()
     password.value = ''
     if (!token) { setError('Enter your authority token.'); return }
     const controller = new AbortController()
@@ -39,7 +38,7 @@ export default function AuthorityAccess({ session, signIn, signOut }: {
     setError('')
     try {
       const { openAuthority } = await import('../api/authority')
-      const authorized = await openAuthority(token, archive, controller.signal)
+      const authorized = await openAuthority(token, controller.signal)
       if (controller.signal.aborted) { authorized.close(); return }
       signIn(authorized)
       close()
@@ -62,10 +61,6 @@ export default function AuthorityAccess({ session, signIn, signOut }: {
             <form className="authority-form" onSubmit={(event) => void submit(event)}>
               <p>A protected buildings request verifies your token. The token is held in this tab’s memory. Sessions end after 20 minutes or when you sign out.</p>
               <label>Authority token <input name="token" type="password" required autoComplete="off" spellCheck={false} /></label>
-              <details><summary>Protected PMTiles archive (optional)</summary>
-                <label>Archive path on the API origin <input name="archive" type="text" autoComplete="off" placeholder="/private/wards-buildings.pmtiles" /></label>
-                <p>The archive server must validate the authority header and serve non-cacheable ranges.</p>
-              </details>
               {error && <p role="alert">{error}</p>}
               <button type="submit" className="primary-button" disabled={pending}>{pending ? 'Verifying…' : 'Verify access'}</button>
             </form>

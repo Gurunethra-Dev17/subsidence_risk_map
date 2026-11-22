@@ -65,7 +65,7 @@ export default defineConfig(({ mode }) => {
   for (const key of ['VITE_MOCK_MODE', 'VITE_BASEMAP_ENABLED']) {
     if (env[key]?.trim() && !/^(true|false)$/i.test(env[key].trim())) throw new Error(`${key} must be true or false.`)
   }
-  for (const key of ['VITE_API_URL', 'VITE_WARDS_TILE_URL', 'VITE_CELLS_TILE_URL', 'VITE_POINTS_TILE_URL', 'VITE_BASEMAP_TILE_URL', 'VITE_BASEMAP_STYLE_URL']) {
+  for (const key of ['VITE_API_URL', 'VITE_WARDS_GEOJSON_URL', 'VITE_WARDS_TILE_URL', 'VITE_CELLS_TILE_URL', 'VITE_POINTS_TILE_URL', 'VITE_BASEMAP_TILE_URL', 'VITE_BASEMAP_STYLE_URL']) {
     if (!env[key]?.trim()) continue
     try { publicHttpUrl(env[key].trim(), 'https://frontend.invalid/') }
     catch { throw new Error(`${key} must be a relative, HTTPS or loopback URL without credentials.`) }

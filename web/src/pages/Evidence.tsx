@@ -31,6 +31,27 @@ function MetricChart({ rows, label, min = 0 }: { rows: { name: string; value: nu
   </figure>
 }
 
+function EngineMethod() {
+  return <section className="evidence-section">
+    <h2>From radar observations to building indicators</h2>
+    <p>Vertical land motion (VLM) is reported in millimetres per year. Negative rates mean sinking and positive rates mean rising. The loader multiplies inputs in centimetres per year by 10 and clips observations to the configured city bounds. The engine calculates distances in metres in projected UTM coordinates (EPSG:32643 for Delhi).</p>
+    <h3>Motion near a building centroid</h3>
+    <p>The Delhi defaults use observations within 100 m of the centroid. With fewer than three points, the estimate and interquartile range are unavailable and the record is marked sparse. Otherwise, the engine takes the weighted median of the rates, with weight <var>wᵢ</var> = 1/<var>dᵢ</var> for distance <var>dᵢ</var>. Observations exactly at the centroid receive equal weight and supply the estimate on their own.</p>
+    <p>The weighted interquartile range is the 75th minus the 25th percentile of the selected rates. The engine computes weighted percentiles by linear interpolation between midpoint plotting positions. The spread quantifies variation among nearby observations. Structural motion and statistical confidence require separate evidence.</p>
+    <h3>Angular distortion scenario</h3>
+    <p>The engine buffers each footprint by 20 m and forms distinct pairs at distances of 10–60 m inclusive, with at least one observation inside or on the buffered footprint. Each pair contributes an annual angular rate <var>βᵢⱼ</var> = |<var>vᵢ</var> − <var>vⱼ</var>| × 10<sup>−3</sup> / <var>dᵢⱼ</var>, where <var>v</var> is in mm/yr and <var>dᵢⱼ</var> is in metres.</p>
+    <p>With at least three pairs, the building rate is the 90th percentile of the pair rates. The horizon distortion is that rate multiplied by the scenario length in years (10 by default for Delhi), yielding a dimensionless value. The display rounds to the nearest reciprocal 1/N and uses 1/inf for zero. Fewer than three pairs leave the rate, horizon distortion, ratio, and class unavailable.</p>
+    <ul>
+      <li><strong>Low</strong> below 0.001 (1/1000).</li>
+      <li><strong>Watch</strong> at 0.001 and above, below 0.002.</li>
+      <li><strong>Inspect</strong> at 0.002 (1/500) and above.</li>
+    </ul>
+    <p>In the engine’s worked example, −10 and −6 mm/yr over 20 m give a pair rate of 0.0002 per year. A building rate of that magnitude gives 0.002 over 10 years, displayed as 1/500 and classified Inspect.</p>
+    <p>Sparse or uneven radar coverage can affect the estimate. The horizon assumes constant rates and the classes are screening bands, with no implied probability of damage or failure. Delhi’s sensitivity runs cross 50, 100, and 150 m centroid radii with 10–40, 10–60, and 20–60 m pair windows. The nine variants test parameter sensitivity.</p>
+    <p><a href="https://github.com/Gurunethra-Dev17/subsidence_risk_map/blob/4883e08/engine/METHOD.md">Engine method and Delhi defaults</a></p>
+  </section>
+}
+
 function Methodology({ meta }: { meta?: Api['MetaResponse'] }) {
   return <>
     <section className="evidence-section">
@@ -46,6 +67,7 @@ function Methodology({ meta }: { meta?: Api['MetaResponse'] }) {
       </div>
       <p>Median vertical motion adds context. Negative values indicate sinking. A ward with insufficient coverage receives no score or rank. Small cell samples are suppressed.</p>
     </section>
+    <EngineMethod />
     <section className="evidence-section">
       <h2>Sources and uncertainty</h2>
       <dl className="method-sources">

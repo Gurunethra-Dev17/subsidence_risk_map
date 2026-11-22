@@ -36,7 +36,7 @@ export function wardLayers(vector: boolean): LayerSpecification[] {
   const source = { source: wardSource, ...(vector ? { 'source-layer': 'wards' } : {}) }
   const fillColor: ExpressionSpecification = [
     'case', insufficient, insufficientBand.color,
-    ['!=', ['typeof', ['get', 'score']], 'number'], unavailableBand.color,
+    ['any', ['!=', ['get', 'status'], 'ranked'], ['!=', ['typeof', ['get', 'score']], 'number']], unavailableBand.color,
     ['step', ['number', ['get', 'score']], scoreBands[0].color,
       scoreBands[1].min, scoreBands[1].color, scoreBands[2].min, scoreBands[2].color],
   ]

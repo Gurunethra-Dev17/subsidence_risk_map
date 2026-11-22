@@ -2,7 +2,7 @@ import type { ExpressionSpecification, LayerSpecification } from 'maplibre-gl'
 import { scoreBands, unavailableBand } from '../wardMetrics'
 
 export const overlaySettings = {
-  cells: { label: 'Grid cells', zoom: 8, description: 'Cell Inspection Index · hatching marks suppressed cells' },
+  cells: { label: 'Grid cells', zoom: 8, description: 'Cell Inspection Index · hatching marks suppressed cells · grey marks unavailable metrics' },
   points: { label: 'Radar points', zoom: 10, description: 'Vertical land motion · orange: sinking ≥4 mm/yr · blue: other motion' },
   buildings: { label: 'Buildings', zoom: 13, description: 'Distortion class · blue: low · amber: watch · plum: inspect · grey: unavailable' },
 } as const
@@ -13,7 +13,8 @@ const radarColors = { sinking: '#cf621c', other: '#276d9f', missing: '#8796a5' }
 const buildingColors = { low: '#559dc2', watch: '#e6b34e', inspect: '#a54b88', missing: '#8796a5' }
 export const overlayLegends: Record<OverlayKey, { label: string; color: string; hatch?: boolean }[]> = {
   points: [{ label: 'Sinking ≥4 mm/yr', color: radarColors.sinking }, { label: 'Other motion', color: radarColors.other }, { label: 'Unavailable', color: radarColors.missing }],
-  cells: [...scoreBands.map((band) => ({ label: band.range, color: band.color })), { label: 'Suppressed', color: '#8796a5', hatch: true }],
+  cells: [...scoreBands.map((band) => ({ label: band.range, color: band.color })), { label: 'Suppressed', color: '#8796a5', hatch: true },
+    { label: 'Metrics unavailable', color: unavailableBand.color }],
   buildings: [{ label: 'Low', color: buildingColors.low }, { label: 'Watch', color: buildingColors.watch },
     { label: 'Inspect', color: buildingColors.inspect }, { label: 'Unavailable', color: buildingColors.missing }],
 }
@@ -60,7 +61,8 @@ export function makeOverlayLayers(key: OverlayKey, vector: boolean, opacity: num
   const suppressed = ['==', ['get', 'suppressed'], true] satisfies ExpressionSpecification
   return [
     { ...base, type: 'fill', paint: {
-      'fill-color': ['case', suppressed, '#8796a5', ['!=', ['typeof', ['get', 'cell_score']], 'number'], unavailableBand.color,
+      'fill-color': ['case', suppressed, '#8796a5',
+        ['any', ['!=', ['get', 'suppressed'], false], ['!=', ['typeof', ['get', 'cell_score']], 'number']], unavailableBand.color,
         ['step', ['number', ['get', 'cell_score']], scoreBands[0].color, scoreBands[1].min, scoreBands[1].color, scoreBands[2].min, scoreBands[2].color]],
       'fill-outline-color': '#253c58', 'fill-opacity': opacity,
     } },
@@ -79,14 +81,17 @@ export function describeFeature(layer: OverlayKey, properties: Record<string, un
   if (layer === 'points') {
     rows.push(['Vertical land motion', numberField(properties.vlm_mm_yr, ' mm/yr')])
   } else if (layer === 'cells') {
-    const suppressed = properties.suppressed === true
-    rows.push(['Coverage', suppressed ? 'Suppressed · small sample' : 'Eligible for cell scoring'])
-    if (!suppressed) {
+    if (properties.suppressed === true) {
+      rows.push(['Coverage', 'Suppressed · small sample'])
+    } else if (properties.suppressed === false) {
+      rows.push(['Coverage', 'Reported as unsuppressed'])
       rows.push(['Index', numberField(properties.cell_score, '/100')], ['Rank in ward', numberField(properties.cell_rank_in_ward)])
       if (typeof properties.vlm_median_mm_yr === 'number') rows.push(['Median vertical motion', numberField(properties.vlm_median_mm_yr, ' mm/yr')])
       if (typeof properties.beta_p90_horizon === 'number') rows.push(['90th percentile distortion', numberField(properties.beta_p90_horizon)])
       if (typeof properties.share_sinking_gt4 === 'number') rows.push(['Share sinking ≥4 mm/yr', numberField(properties.share_sinking_gt4 * 100, '%')])
       if (typeof properties.n_buildings === 'number') rows.push(['Buildings counted', numberField(properties.n_buildings)])
+    } else {
+      rows.push(['Coverage', 'Coverage unavailable'], ['Index', 'Unavailable'], ['Rank in ward', 'Unavailable'])
     }
   } else {
     rows.push(['Vertical land motion', numberField(properties.vlm_mm_yr, ' mm/yr')],

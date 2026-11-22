@@ -5,7 +5,8 @@ import { config } from '../config'
 type Api = components['schemas']
 export type Ward = Api['Ward']
 export type WardQuery = NonNullable<operations['listWards']['parameters']['query']>
-export type WardGeometry = FeatureCollection<Polygon | MultiPolygon, Pick<Ward, 'ward_id' | 'ward_name'>>
+export type WardGeometry = FeatureCollection<Polygon | MultiPolygon,
+  Pick<Ward, 'ward_id' | 'ward_name'> & Partial<Pick<Ward, 'status' | 'score'>>>
 export type RadarGeometry = FeatureCollection<Point, { pt_id: string; vlm_mm_yr: number }>
 
 export interface DataService {
@@ -32,7 +33,7 @@ export class DataServiceError extends Error {
 }
 
 export function isSyntheticDataset(meta?: Api['MetaResponse']) {
-  return config.mock || meta?.data_vintage?.trim().toLowerCase() === 'synthetic'
+  return config.mock || (typeof meta?.data_vintage === 'string' && meta.data_vintage.trim().toLowerCase() === 'synthetic')
 }
 
 export async function getSyntheticWardGeometry(): Promise<WardGeometry> {

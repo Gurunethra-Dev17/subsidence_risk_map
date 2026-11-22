@@ -6,6 +6,7 @@ import { LocateFixed, RotateCcw, RotateCw, X } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { WardGeometry } from '../api/service'
 import type { AuthoritySession } from '../api/authority'
+import { isDelhiWardId } from '../api/delhiMap'
 import { config } from '../config'
 import { scoreBand, showNumber } from '../wardMetrics'
 import { loadBasemap, neutralBasemap } from './basemap'
@@ -44,8 +45,10 @@ function hitTest(map: MapLibreMap, event: MapMouseEvent) {
   return { ward: hits.find((hit) => hit.layer.id === wardFill)?.properties }
 }
 
-export default function MapWorkspace({ geometry, selection, onSelect, authority, onUnauthorized, appearance }: {
+export default function MapWorkspace({ geometry, wardTiles, realMap, selection, onSelect, authority, onUnauthorized, appearance }: {
   geometry: WardGeometry | null
+  wardTiles?: string
+  realMap: boolean
   selection: Selection | null
   onSelect: (id: string, origin: Selection['origin']) => void
   authority: AuthoritySession | null
@@ -66,11 +69,12 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
   const [attempt, setAttempt] = useState(0)
   const [feature, setFeature] = useState<MapFeature | null>(null)
   const [mapError, setMapError] = useState(false)
+  const [archiveError, setArchiveError] = useState<string | null>(null)
   const { active, preferred, change, coverage } = useCityPerspective(layerMap, mapError)
   const [basemap, setBasemap] = useState<BasemapStatus>('loading')
   const [hover, setHover] = useState<Hover | null>(null)
   const [focusMiss, setFocusMiss] = useState<string | null>(null)
-  const tiles = config.mock ? undefined : config.wardTiles
+  const tiles = wardTiles
   const hasGeometry = Boolean(geometry?.features.length || tiles)
 
   useEffect(() => {
@@ -88,11 +92,15 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
         setMapError(true)
       }
     }
+    const reportArchiveError = (message: string) => {
+      if (!controller.signal.aborted) setArchiveError(message)
+      reportError()
+    }
 
     async function mount(element: HTMLDivElement) {
       const bounds = new LngLatBounds()
       let source: SourceSpecification
-      const library = !config.mock && (tiles || config.cellTiles || config.pointTiles) ? await import('pmtiles') : null
+      const library = realMap && (tiles || config.cellTiles || config.pointTiles) ? await import('pmtiles') : null
       if (controller.signal.aborted) return
       const protocol = library && new library.Protocol({ metadata: true })
       if (protocol) {
@@ -102,13 +110,22 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
       if (tiles && library && protocol) {
         const url = new URL(tiles, window.location.href).href
         const archive = new library.PMTiles(url)
-        const header = await archive.getHeader()
+        const [header, metadata] = await Promise.all([archive.getHeader(), archive.getMetadata()]).catch(() => [null, null] as const)
         if (controller.signal.aborted) return
+        if (!header || !metadata) {
+          reportArchiveError('The configured Delhi ward PMTiles could not be loaded.')
+          return
+        }
+        const { vector_layers: layers } = metadata as { vector_layers?: { id?: string }[] }
+        if (header.tileType !== library.TileType.Mvt || !Array.isArray(layers) || !layers.some((layer) => layer?.id === 'wards')) {
+          reportArchiveError('Dataset mismatch. The ward archive must contain the C5 wards source layer.')
+          return
+        }
         protocol.add(archive)
         source = { type: 'vector', url: 'pmtiles://' + url }
         bounds.extend([header.minLon, header.minLat]).extend([header.maxLon, header.maxLat])
       } else if (geometry) {
-        source = { type: 'geojson', data: geometry, attribution: 'Synthetic ward fixtures' }
+        source = { type: 'geojson', data: geometry, ...(realMap ? {} : { attribution: 'Synthetic ward fixtures' }) }
         for (const feature of geometry.features) addBounds(bounds, feature.geometry)
       } else return
 
@@ -136,7 +153,8 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
       current.on('error', (event) => {
         const sourceId = 'sourceId' in event ? event.sourceId : undefined
         if (controller.signal.aborted || (typeof sourceId === 'string' && sourceId.startsWith('overlay-'))) return
-        if (sourceId === wardSource || installingWards) reportError()
+        if (sourceId === wardSource && tiles) reportArchiveError('The configured Delhi ward PMTiles could not be loaded.')
+        else if (sourceId === wardSource || installingWards) reportError()
         else setBasemap('degraded')
       })
       current.on('style.load', () => {
@@ -171,10 +189,11 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
           const { x, y } = lastPointer.point
           if (feature) {
             setHover({ x, y, label: feature.id, detail: feature.fields[0].value, layer: feature.layer })
-          } else if (typeof ward?.ward_name === 'string') {
+          } else if (typeof ward?.ward_name === 'string' && (!realMap || isDelhiWardId(ward.ward_id))) {
             const band = scoreBand(ward.status, ward.score)
             setHover({ x, y, label: ward.ward_name,
-              detail: band.label + (typeof ward.score === 'number' ? ' · ' + showNumber(ward.score) + '/100' : '') })
+              detail: band.label + (typeof ward.score === 'number' && band.id !== 'insufficient' && band.id !== 'unavailable'
+                ? ' · ' + showNumber(ward.score) + '/100' : '') })
           } else setHover(null)
         })
       })
@@ -184,7 +203,7 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
         const { feature, ward } = hitTest(current, event)
         clearHover()
         if (feature) setFeature(feature)
-        else if (typeof ward?.ward_id === 'string') {
+        else if (typeof ward?.ward_id === 'string' && (!realMap || isDelhiWardId(ward.ward_id))) {
           setFeature(null)
           onSelect(ward.ward_id, 'map')
         }
@@ -201,7 +220,7 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
       lastFocused.current = null
       if (hasProtocol) removeProtocol('pmtiles')
     }
-  }, [attempt, geometry, hasGeometry, onSelect, tiles])
+  }, [attempt, geometry, hasGeometry, onSelect, realMap, tiles])
 
   useEffect(() => {
     if (!instance || instance !== map.current) return
@@ -266,8 +285,8 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
         pitch: current.getPitch(), bearing: current.getBearing() })
       return true
     }
-    const synthetic = geometry?.features.find((feature) => feature.properties.ward_id === selection.id)
-    if (synthetic && focus(addBounds(new LngLatBounds(), synthetic.geometry))) return
+    const boundary = geometry?.features.find((feature) => feature.properties.ward_id === selection.id)
+    if (boundary && focus(addBounds(new LngLatBounds(), boundary.geometry))) return
     if (!tiles || focus(featureBounds(current, selection.id))) return
 
     const finish = () => {
@@ -305,19 +324,20 @@ export default function MapWorkspace({ geometry, selection, onSelect, authority,
     <>
       <div className="map-canvas" ref={container} aria-label="Map of ward inspection priorities"
         data-perspective={shown3d ? '3d' : '2d'} data-basemap={theme} />
-      {mapError && geometry && <WardPlan geometry={geometry} activeId={selection?.id} onSelect={(id) => onSelect(id, 'map')} />}
+      {mapError && geometry && <WardPlan geometry={geometry} synthetic={!realMap} activeId={selection?.id} onSelect={(id) => onSelect(id, 'map')} />}
       {hasGeometry && !mapError && <MapLayers map={layerMap} wardId={selection?.id ?? null} authority={authority} onUnauthorized={onUnauthorized}
-        theme={override} onTheme={setOverride} onHide={hideFeature} />}
+        realMap={realMap} theme={override} onTheme={setOverride} onHide={hideFeature} />}
       {!hasGeometry && <p className="map-message">No ward boundaries are available. Ward summaries are accessible from the rankings.</p>}
       {hasGeometry && !instance && !mapError && <p className="map-message" role="status">Loading ward map…</p>}
-      {mapError && <div className="map-message plan-message" role="alert">{geometry ?
+      {mapError && <div className="map-message plan-message" role="alert">{archiveError ?? (geometry ?
         'Interactive graphics unavailable. The 2D ward plan remains selectable.' :
-        'Interactive graphics unavailable. Use the rankings to inspect wards.'}
+        'Interactive graphics unavailable. Use the rankings to inspect wards.')}
         <button type="button" className="text-button" onClick={() => {
           setLayerMap(null)
           setStyleChange(null)
           setInstance(null)
           setMapError(false)
+          setArchiveError(null)
           setAttempt((count) => count + 1)
         }}>Retry map</button>
       </div>}

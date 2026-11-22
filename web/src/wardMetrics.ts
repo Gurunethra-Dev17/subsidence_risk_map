@@ -12,7 +12,7 @@ export type ScoreBand = typeof scoreBands[number] | typeof insufficientBand | ty
 
 export function scoreBand(status: string | undefined, score: number | null | undefined): ScoreBand {
   if (status === 'insufficient_data') return insufficientBand
-  if (score == null || !Number.isFinite(score)) return unavailableBand
+  if (status !== 'ranked' || score == null || !Number.isFinite(score)) return unavailableBand
   return score >= scoreBands[2].min ? scoreBands[2] : score >= scoreBands[1].min ? scoreBands[1] : scoreBands[0]
 }
 

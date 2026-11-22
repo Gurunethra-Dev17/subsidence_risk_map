@@ -54,7 +54,26 @@ The map, ranking table and inspector share the selected ward ID. The map uses th
 
 Copy `.env.example` to `.env.local` to override defaults. Set `VITE_MOCK_MODE=false` to use the public C4 API. `VITE_API_URL` must include the version prefix, which defaults to `/api/v1`. A separately hosted API must permit this frontend's origin.
 
-`VITE_WARDS_TILE_URL` accepts a public C5 PMTiles archive in live mode. The tile host must support HTTP Range requests and cross-origin access if served separately. Live camera focusing uses the geometry available from the archive's loaded ward tiles.
+### Real Delhi map handoff
+
+Put these values in `web/.env.local` for local review or inject them at build time for a staging build. Obtain the values from the approved handoff for one release.
+
+| Variable | Value |
+| --- | --- |
+| `VITE_MOCK_MODE` | `false` |
+| `VITE_API_URL` | Person E’s matching C4 API base, including `/api/v1` |
+| `VITE_DELHI_DATA_VINTAGE` | Exact real release value returned by `/meta` in `data_vintage` |
+| `VITE_WARDS_GEOJSON_URL` | Approved Delhi 2022 GeoJSON URL with 250 named polygons or multipolygons in longitude/latitude and unique string IDs `1` through `250`. Preferred when configured. |
+| `VITE_WARDS_TILE_URL` | Versioned C5 ward PMTiles URL with source layer `wards`. Required if GeoJSON is unset and used as fallback if the GeoJSON cannot be loaded. |
+| `VITE_CELLS_TILE_URL` | Optional C5 cell PMTiles URL with layer `cells`. Leave blank to use the selected ward’s C4 cell endpoint, including when the delivered archive contains geometry only and a scored view is needed. |
+| `VITE_POINTS_TILE_URL` | Optional approved C5 radar PMTiles URL with layer `points`. Live radar remains visible in Authority mode only. |
+| `VITE_DELHI_MAP_ATTRIBUTION` | Optional plain-text ward-source credit from the delivered manifest. The app also displays the C5 contract attribution. Use the manifest’s exact source provenance. |
+
+The API must report `city=delhi`, `n_wards=250`, and the configured vintage. Its ward list must contain all 250 canonical string IDs. A synthetic API continues to use its matching bundled ward boundaries and keeps the configured real map sources off. A loaded GeoJSON with mismatched IDs is rejected. A valid GeoJSON is coloured with the matching C4 ward metrics. Ward PMTiles use their own C5 metrics, including a score-unavailable style for unscored geometry. Cells with unknown suppression show unavailable coverage and metrics. A cell archive load failure still falls back to the selected ward’s C4 cells.
+
+Use approved, versioned asset URLs for the same release as the API and confirm the C0/C5 manifests and tile QA at handoff. The [ward lineage](../data/LINEAGE.md) records GSDL Delhi as the source named by OpenCity, Vaidyanathan R as the credited contributor, and the Kaggle mirror as the origin of the candidate bytes. Use the credit and provenance for the actual delivered release.
+
+GeoJSON must return the file directly with `GET` CORS when cross-origin. Tile hosts must support `GET`, `HEAD`, byte ranges with HTTP 206 and `Content-Range`, and CORS for the frontend origin. Use same-origin or HTTPS URLs in deployed builds. HTTP is allowed for loopback development. Add the API, archive, GeoJSON, and basemap origins to your hosting Content Security Policy as needed. Build with `npm run build` after changing environment values.
 
 The interface starts in light appearance with the [OpenFreeMap Bright street style](https://openfreemap.org/quick_start/). The Layers menu can follow the UI appearance or explicitly select light or dark streets. Set `VITE_BASEMAP_STYLE_URL` to replace the light style or supply both `VITE_BASEMAP_TILE_URL` and `VITE_BASEMAP_ATTRIBUTION` for a public raster basemap. Set `VITE_BASEMAP_ENABLED=false` for boundary-only rendering.
 
@@ -62,7 +81,7 @@ The interface starts in light appearance with the [OpenFreeMap Bright street sty
 
 At building detail zoom (14+) the map can extrude polygons from the public OpenMapTiles `building` layer using its positive `render_height` and `render_min_height` above ground in metres. The provider derives these values from available tags and levels. Its schema does not identify the origin of each height, so the scene labels the heights as potentially estimated. These public buildings provide geographic context only. They have no authority risk attributes, and their heights do not represent subsidence or terrain elevation.
 
-The 2D/3D, compass, bearing and reset controls share the same map and ward selection. Zoom in to building detail on small screens. The map stays flat when eligible building data is unavailable, including on a raster basemap. Without WebGL, the published mock ward geometries remain selectable in a simple 2D plan. In live mode without renderable boundaries, rankings and their inspector remain available.
+The 2D/3D, compass, bearing and reset controls share the same map and ward selection. Zoom in to building detail on small screens. The map stays flat when eligible building data is unavailable, including on a raster basemap. Without WebGL, loaded ward GeoJSON remains selectable in a simple 2D plan. In live mode without renderable boundaries, rankings and their inspector remain available.
 
 The bundled provider supplies street vector data. Satellite imagery requires a separately licensed raster source, credentials where required by that provider, and attribution. No satellite source is configured.
 
@@ -70,7 +89,7 @@ The bundled provider supplies street vector data. Satellite imagery requires a s
 
 - Configure `VITE_CELLS_TILE_URL` and `VITE_POINTS_TILE_URL` with versioned C5 PMTiles archives using the `cells` and `points` source layers. Live cells fall back to the selected ward's C4 cell endpoint. The C0 radar CSV and C2 scores supply synthetic demo layers. The demo publishes only synthetic radar points, while live radar and building controls are scoped to authority access. The optional dark street basemap uses the supported OpenFreeMap Dark style.
 - Authority mode becomes available only after the live C4 `GET /buildings` endpoint accepts the entered authority header. The token is kept in tab memory for up to 20 minutes. Sign-out, expiry and 401/403 responses clear the session and restricted layers. The API must enforce authorisation.
-- The default building source is the authenticated viewport query, limited to 500 features. A separately deployed protected `buildings` PMTiles archive may be entered at runtime on the API origin. That deployment must authorise each range request with the same header and return HTTP 206 with `Cache-Control: no-store`. Never configure a static public building archive. HTTPS is required outside loopback development.
+- Restricted building metrics come exclusively from the authenticated C4 viewport query, limited to 500 features. The API serves these responses with `Cache-Control: no-store`. Keep building metrics and authority credentials server-side. HTTPS is required outside loopback development.
 - The C4 PDF route generates **ward** briefs. The preview can print or save a clearly labelled ward and prioritised-cell summary when the route is unavailable. Building selections expose individually authorised metrics on the map and there is no building PDF endpoint in C4.
 
 ## CI handoff for Person E
@@ -96,6 +115,6 @@ Playwright starts the mock production preview on port 4173 and a second producti
 
 Publish only `web/dist/` from a clean build. The app uses a single entry URL and client-side view state. The included `public/_headers` supplies cache and security headers on compatible hosts. On other hosts, configure those headers directly. Revalidate HTML, cache hashed assets immutably and serve JavaScript workers with the correct MIME type. The host should serve the app over HTTPS and must keep `/api/v1/*` out of any HTML fallback.
 
-Produce separate builds for mock and live previews. Set `VITE_MOCK_MODE=false` and `VITE_API_URL` at build time for live mode. If the API is on a separate origin, allow the deployed frontend origin, `GET`, `OPTIONS`, and `X-Authority-Token` in CORS. Use the same API origin for any optional protected building archive. The archive and the API must validate every authenticated request, return `no-store` for restricted data, and support correct partial content for PMTiles. Public archive hosts must permit the frontend origin and Range requests. Production environment URLs must use HTTPS, with HTTP allowed for loopback development. Deployment-defined API origins and basemap providers must be added when a host applies a restrictive Content Security Policy.
+Produce separate builds for mock and live previews. Set `VITE_MOCK_MODE=false` and `VITE_API_URL` at build time for live mode. If the API is on a separate origin, allow the deployed frontend origin, `GET`, `OPTIONS`, and `X-Authority-Token` in CORS. Use the real Delhi handoff settings above for the public map sources.
 
 For a comparable startup measurement, serve two production builds on distinct ports and run `node scripts/measure-map.mjs URL_BEFORE URL_AFTER`. This measures five fresh Chrome contexts per build, with the basemap style request held for one second and then rejected, so it measures the ward-map fallback path independently of provider speed.

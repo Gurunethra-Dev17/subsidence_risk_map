@@ -5,8 +5,9 @@ function planPoint(longitude: number, latitude: number) {
   return [longitude * Math.PI / 180, -Math.log(Math.tan(Math.PI / 4 + latitude * Math.PI / 360))]
 }
 
-export default function WardPlan({ geometry, activeId, onSelect }: {
+export default function WardPlan({ geometry, synthetic, activeId, onSelect }: {
   geometry: WardGeometry
+  synthetic: boolean
   activeId?: string
   onSelect: (id: string) => void
 }) {
@@ -28,7 +29,7 @@ export default function WardPlan({ geometry, activeId, onSelect }: {
 
   return (
     <svg className="ward-plan" viewBox={`0 0 ${70 + (maxX - minX) * scale} ${70 + (maxY - minY) * scale}`}
-      aria-label="2D synthetic ward boundaries">
+      aria-label={synthetic ? '2D synthetic ward boundaries' : '2D Delhi ward boundaries'}>
       <defs><pattern id="ward-plan-hatching" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
         <rect width="9" height="9" fill="#aebccd" /><line x1="0" y1="0" x2="0" y2="9" stroke="#56697c" strokeWidth="3" />
       </pattern></defs>

@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from api.auth import require_authority
 from api.brief import generate_brief_pdf
 from api.data import data_store, json_etag, parse_bbox
+from api.insar_status import validation_with_insar_status
 from api.metadata import build_meta_payload
 from api.models import (
     CellFeatureCollection,
@@ -364,8 +365,9 @@ async def get_ward_brief(ward_id: str) -> Response:
     },
 )
 async def get_validation() -> JSONResponse:
-    """Return the configured C3 validation summary."""
-    return json_response(data_store.load_validation_summary())
+    """Return C3 validation with optional, non-processing E7 readiness status."""
+    summary = data_store.load_validation_summary()
+    return json_response(validation_with_insar_status(summary))
 
 
 _BUILDING_FEATURE_COLLECTION_SCHEMA = {

@@ -30,7 +30,13 @@ async function hoverFixture(page: Page, x: number, y: number, label: string) {
 }
 
 test('offline basemap preserves map and ranking selection in both directions', async ({ page }) => {
+  const apiRequests: string[] = []
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/api/v1/')) apiRequests.push(request.url())
+  })
   await openMap(page)
+  await expect(page.getByText('Synthetic data preview', { exact: true })).toBeVisible()
+  await expect(page.getByText('Fictional ward scores, boundaries and radar observations')).toBeVisible()
   await expect(page.getByText('Basemap unavailable · ward data visible')).toBeVisible()
   const { x, y } = await pointOnFixture(page, 77.005, 28.614)
   await hoverFixture(page, x, y, 'Demo Empty')
@@ -44,6 +50,7 @@ test('offline basemap preserves map and ranking selection in both directions', a
   const bounds = await page.locator('.map-canvas').boundingBox()
   if (!bounds) throw new Error('Map canvas is unavailable')
   await hoverFixture(page, bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, 'Demo North')
+  expect(apiRequests).toEqual([])
 })
 
 test('keyboard ranking, risk filters and empty results', async ({ page }) => {

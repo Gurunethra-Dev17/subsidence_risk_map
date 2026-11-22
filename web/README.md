@@ -117,4 +117,25 @@ Publish only `web/dist/` from a clean build. The app uses a single entry URL and
 
 Produce separate builds for mock and live previews. Set `VITE_MOCK_MODE=false` and `VITE_API_URL` at build time for live mode. If the API is on a separate origin, allow the deployed frontend origin, `GET`, `OPTIONS`, and `X-Authority-Token` in CORS. Use the real Delhi handoff settings above for the public map sources.
 
+### Synthetic preview deployment
+
+Build from the complete checkout of `Gurunethra-Dev17/subsidence_risk_map`, branch `c/frontend`, with `web/` as the working directory. The fixture plugin reads the public synthetic files in `contracts/mock/` during the build. Generated TypeScript declarations are tracked in `web/types/`. Type generation is a separate check against `contracts/schemas/`.
+
+| Setting | Value |
+| --- | --- |
+| Framework preset | Vite |
+| Root directory | `web` |
+| Install command | `npm ci --engine-strict` |
+| Build command | `npm run build && npm run verify:assets` |
+| Output directory | `dist` relative to `web` |
+| Build environment | `VITE_MOCK_MODE=true` |
+
+Leave `VITE_API_URL`, `VITE_DELHI_DATA_VINTAGE`, `VITE_DELHI_MAP_ATTRIBUTION`, `VITE_WARDS_GEOJSON_URL`, `VITE_WARDS_TILE_URL`, `VITE_CELLS_TILE_URL`, `VITE_POINTS_TILE_URL`, and basemap overrides unset. The default OpenFreeMap HTTPS basemap supplies street context and 3D heights. All ward scores and radar observations in preview mode are fictional. The PDF workflow uses its labelled print fallback.
+
+For [Vercel Git integration](https://vercel.com/docs/git/vercel-for-github), use the `web/` project root and enable **Include source files outside of the Root Directory in the Build Step**. Set Production branch tracking to `c/frontend` for the dedicated synthetic project and use its stable project domain for CORS. `web/vercel.json` applies the existing security and cache headers and handles SPA navigation after checking static files. Keep `/api/v1/*` and missing asset paths outside the SPA fallback. Vercel selects Node.js 26.x with the current `engines.node` range. Local Node.js 20.19+ remains supported by the repository.
+
+For [Cloudflare Pages Direct Upload](https://developers.cloudflare.com/pages/get-started/direct-upload/), run the install and build locally with Node.js 20.19+ and the preview environment above. In **Workers & Pages**, select **Create application → Get started → Drag and drop your files**. Use a dedicated free project and upload only `web/dist/`. Cloudflare applies the included `_headers` and its default SPA handling. Use the stable project domain shown by the dashboard and upload future builds to the same project. This route needs a Cloudflare account with Pages deployment access and leaves GitHub disconnected. [Netlify manual deployment](https://docs.netlify.com/manage/projects/add-new-project/#deploy-local-files) can also publish the verified output and consumes its `_headers` file.
+
+Before handing off the origin, open the assigned HTTPS domain in a signed-out browser. Confirm the synthetic label, map, Methodology and Validation views, and ward print fallback. Check the response headers for the page and a hashed asset, and confirm the browser makes no localhost, C4 API, or Delhi archive requests. Share the verified origin without a trailing slash or path for the CORS allowlist.
+
 For a comparable startup measurement, serve two production builds on distinct ports and run `node scripts/measure-map.mjs URL_BEFORE URL_AFTER`. This measures five fresh Chrome contexts per build, with the basemap style request held for one second and then rejected, so it measures the ward-map fallback path independently of provider speed.

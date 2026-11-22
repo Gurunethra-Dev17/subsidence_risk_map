@@ -205,8 +205,8 @@ export default function Dashboard() {
           <div>
             <h1><Activity size={21} /> {city?.city ?? 'City'} monitoring</h1>
             <div className="source-status">{synthetic ? <FlaskConical size={14} /> : <Activity size={14} />}
-              <strong>{config.mock ? 'Mock data' : synthetic ? 'Live API · synthetic demo data' : 'Live API'}</strong>
-              <span>{config.mock ? 'Synthetic ward and radar overlays' : synthetic ? 'Fictional ward metrics and boundaries' : city?.data_vintage}</span>
+              <strong>{config.mock ? 'Synthetic data preview' : synthetic ? 'Live API · synthetic demo data' : 'Live API'}</strong>
+              <span>{config.mock ? 'Fictional ward scores, boundaries and radar observations' : synthetic ? 'Fictional ward metrics and boundaries' : city?.data_vintage}</span>
               {!config.mock && <span role="status">{health.state.status === 'ready' ? `API reachable · ${health.state.data.version}`
                 : health.state.status === 'error' ? 'API health check failed' : 'Checking API health…'}</span>}
             </div>

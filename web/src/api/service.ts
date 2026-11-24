@@ -1,6 +1,7 @@
 import type { FeatureCollection, MultiPolygon, Point, Polygon } from 'geojson'
 import type { components, operations } from '../../types/openapi'
 import { config } from '../config'
+import { apiBase, fetchApi, publicEndpoint, wardEndpoint, wardListEndpoint } from './endpoints'
 
 type Api = components['schemas']
 export type Ward = Api['Ward']
@@ -44,37 +45,44 @@ export async function getSyntheticWardGeometry(): Promise<WardGeometry> {
   return (await import('./mock')).syntheticWardGeometry
 }
 
-async function request(path: string, accept: string, signal?: AbortSignal) {
-  const timeout = AbortSignal.timeout(20_000)
-  const response = await fetch(config.apiUrl + path, {
-    headers: { Accept: accept },
-    credentials: 'omit',
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  })
+const base = () => apiBase(config.apiUrl, window.location.href)
+
+async function request(url: URL, accept: string, signal?: AbortSignal) {
+  const response = await fetchApi(url, { Accept: accept }, signal ? [signal] : [])
   if (!response.ok) {
     const body: Api['ErrorEnvelope'] | undefined = await response.json().catch(() => undefined)
-    const message = body?.error?.message
-    throw new DataServiceError(
-      response.status,
-      response.status === 429 ? 'The data service is busy. Wait a moment and try again.'
-        : typeof message === 'string' ? message : `Request failed (HTTP ${response.status}).`,
-      body?.error?.code,
-    )
+    const reason = body?.error?.message
+    let message = typeof reason === 'string' ? reason : `Request failed (HTTP ${response.status}).`
+    if (response.status === 429) message = 'The data service is busy. Wait a moment and try again.'
+    throw new DataServiceError(response.status, message, body?.error?.code)
   }
   return response
 }
 
-async function json<T>(path: string, signal?: AbortSignal, accept = 'application/json'): Promise<T> {
-  return (await request(path, accept, signal)).json()
+async function json<T>(url: URL, signal?: AbortSignal, accept = 'application/json'): Promise<T> {
+  return (await request(url, accept, signal)).json()
 }
 
-const wardPath = (wardId: string) => `/wards/${encodeURIComponent(wardId)}`
-const wardCache = new Map<string, { ward: Ward; expires: number }>()
-const cellCache = new Map<string, { cells: Api['CellFeatureCollection']; expires: number }>()
+function cachedByWard<T>(capacity: number, load: (wardId: string, signal?: AbortSignal) => Promise<T>) {
+  const cache = new Map<string, { value: T; expires: number }>()
+  return async (wardId: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted()
+    const hit = cache.get(wardId)
+    if (hit && hit.expires > Date.now()) return hit.value
+    const value = await load(wardId, signal)
+    signal?.throwIfAborted()
+    if (!cache.has(wardId) && cache.size >= capacity) {
+      const oldest = cache.keys().next().value
+      if (oldest !== undefined) cache.delete(oldest)
+    }
+    cache.set(wardId, { value, expires: Date.now() + 60_000 })
+    return value
+  }
+}
 
 const liveService: DataService = {
   async getMeta(signal) {
-    const meta = await json<Api['MetaResponse']>('/meta', signal)
+    const meta = await json<Api['MetaResponse']>(publicEndpoint(base(), 'meta'), signal)
     if (config.requireReal && (isSyntheticDataset(meta) || meta.city !== 'delhi' || meta.n_wards !== 250 ||
       !config.delhiVintage || meta.data_vintage !== config.delhiVintage || (config.e9 && !isAcceptedDelhiDataset(meta)))) {
       throw new DataServiceError(409, 'The API does not serve the configured real Delhi dataset.')
@@ -82,46 +90,20 @@ const liveService: DataService = {
     return meta
   },
   listWards(query, signal) {
-    const params = new URLSearchParams()
-    for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== undefined) params.set(key, String(value))
-    }
-    return json(params.size ? `/wards?${params}` : '/wards', signal)
+    return json(wardListEndpoint(base(), query), signal)
   },
-  async getWard(wardId, signal) {
-    signal?.throwIfAborted()
-    const hit = wardCache.get(wardId)
-    if (hit && hit.expires > Date.now()) return hit.ward
-    const ward = await json<Ward>(wardPath(wardId), signal)
-    if (wardCache.size >= 100) {
-      const oldest = wardCache.keys().next().value
-      if (oldest !== undefined) wardCache.delete(oldest)
-    }
-    wardCache.set(wardId, { ward, expires: Date.now() + 60_000 })
-    return ward
-  },
-  async getWardCells(wardId, signal) {
-    signal?.throwIfAborted()
-    const cached = cellCache.get(wardId)
-    if (cached && cached.expires > Date.now()) return cached.cells
-    const cells = await json<Api['CellFeatureCollection']>(`${wardPath(wardId)}/cells`, signal, 'application/geo+json, application/json')
-    signal?.throwIfAborted()
-    if (cellCache.size >= 12) {
-      const oldest = cellCache.keys().next().value
-      if (oldest !== undefined) cellCache.delete(oldest)
-    }
-    cellCache.set(wardId, { cells, expires: Date.now() + 60_000 })
-    return cells
-  },
+  getWard: cachedByWard<Ward>(100, (wardId, signal) => json(wardEndpoint(base(), wardId, 'ward'), signal)),
+  getWardCells: cachedByWard<Api['CellFeatureCollection']>(12, (wardId, signal) =>
+    json(wardEndpoint(base(), wardId, 'cells'), signal, 'application/geo+json, application/json')),
   async getWardBrief(wardId, signal) {
-    const response = await request(`${wardPath(wardId)}/brief.pdf`, 'application/pdf', signal)
+    const response = await request(wardEndpoint(base(), wardId, 'brief'), 'application/pdf', signal)
     if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/pdf')) {
       throw new DataServiceError(502, 'The brief endpoint did not return a PDF.')
     }
     return response.blob()
   },
-  getValidation: (signal) => json('/validation', signal),
-  getHealth: (signal) => json('/health', signal),
+  getValidation: (signal) => json(publicEndpoint(base(), 'validation'), signal),
+  getHealth: (signal) => json(publicEndpoint(base(), 'health'), signal),
   async getMockRadarGeometry() {
     return null
   },

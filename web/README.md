@@ -34,6 +34,103 @@ The Vite development middleware binds to IPv4 loopback, allows same-origin read 
 
 The preview uses the labelled browser-print brief. Authority access and live radar require the authenticated backend. Data and figures are internal team material. Keep the preview on loopback without a tunnel. Starts with incompatible packages fail with a diagnostic and the browser exposes retry states for request failures. The normal development and production commands retain their existing mock or configured live API behavior. Production builds reject the preview mode.
 
+## Real E9 loopback integration
+
+Use E's backend checkpoint `3cbc30a15f9a44671a8527123c0d98bbea2973af`. Keep it in a separate detached checkout. The commands below use the existing external packages by absolute path. The backend opens these files directly, so there is no need to duplicate either Parquet export. Verify the handoff's `SHA256SUMS.txt` and `REQUIRED_EXISTING_SHA256.txt` before setup.
+
+Run these commands from the frontend repository root to create the isolated checkout.
+
+```powershell
+git fetch origin
+$frontend = (Get-Location).Path
+$backend = Join-Path $env:TEMP 'subsidence-e9-3cbc30a-isolated'
+git clone --shared --local --no-checkout $frontend $backend
+git -C $backend checkout --detach 3cbc30a15f9a44671a8527123c0d98bbea2973af
+Push-Location $backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e '.[api,integration]'
+.\.venv\Scripts\python.exe -m pip check
+@'
+import duckdb
+with duckdb.connect() as conn:
+    conn.execute("INSTALL httpfs")
+    conn.execute("LOAD httpfs")
+    conn.execute("INSTALL spatial")
+    conn.execute("LOAD spatial")
+    print("DuckDB spatial ready")
+'@ | .\.venv\Scripts\python.exe -
+Pop-Location
+```
+
+You can use a verified existing Python 3.11 environment if disk space is limited. Always launch with the detached E9 checkout as the working directory so the Python API modules resolve to the exact checkpoint. In this workspace the earlier sibling checkout's `.venv\Scripts\python.exe` is a compatible alternative.
+
+In a PowerShell terminal from the frontend root, configure and start E9. Keep the terminal open for test execution and cleanup.
+
+```powershell
+$frontend = (Get-Location).Path
+$backend = Join-Path $env:TEMP 'subsidence-e9-3cbc30a-isolated'
+$python = Join-Path $backend '.venv/Scripts/python.exe'
+# If using the verified existing environment, set $python to its full executable path.
+# $python = (Resolve-Path '..\subsidence_risk_map-c11-backend\.venv\Scripts\python.exe').Path
+$packages = Join-Path $env:USERPROFILE 'Desktop/subsidence-data'
+$d8 = Join-Path $packages 'delhi-c2-c3-person-c'
+$e9 = Join-Path $packages 'delhi-e9-person-c'
+$env:API_ENV = 'production'
+$env:API_WARD_SUMMARY_PATH = Join-Path $d8 'ward_summary.json'
+$env:API_CELL_SCORES_PATH = Join-Path $d8 'cell_scores.geojson'
+$env:API_VALIDATION_SUMMARY_PATH = Join-Path $d8 'validation_summary.json'
+$env:API_BUILDING_METRICS_PATH = Join-Path $e9 'C1/building_metrics.parquet'
+$env:API_BUILDINGS_GEOMETRY_PATH = Join-Path $packages 'buildings.parquet'
+$env:API_C6_CONFIG_PATH = Join-Path $e9 'reference/configs/delhi.yaml'
+$env:API_CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173,https://subsidence-risk-map.vercel.app'
+Remove-Item Env:API_INSAR_MANIFEST_PATH -ErrorAction SilentlyContinue
+$env:AUTHORITY_TOKEN = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+Push-Location $backend
+& $python -B -m api.preflight
+if ($LASTEXITCODE) { Pop-Location; throw 'E9 preflight failed.' }
+$e9Server = Start-Process -FilePath $python -WorkingDirectory $backend -ArgumentList '-B','-m','uvicorn','api.main:app','--host','127.0.0.1','--port','8002','--no-access-log' -WindowStyle Hidden -PassThru
+Pop-Location
+```
+
+Check [health](http://127.0.0.1:8002/api/v1/health) and [E9 Swagger](http://127.0.0.1:8002/api/v1/docs). The browser suite enters the temporary authority token from this process environment. For manual authority review, generate a fresh temporary value in a local password manager. Replace the token assignment in the setup above with the masked prompt below, then enter the same value in the masked Authority access form.
+
+```powershell
+$temporaryToken = Read-Host 'Temporary authority token' -AsSecureString
+$env:AUTHORITY_TOKEN = [System.Net.NetworkCredential]::new('', $temporaryToken).Password
+$temporaryToken.Dispose()
+```
+
+Keep the token out of Vite variables, terminal output, screenshots and browser storage.
+
+In a separate terminal from the frontend root, serve the allowlisted B package. The server verifies the assets' SHA-256s and supports HEAD, single byte ranges, local CORS, and gzip fallbacks.
+
+```powershell
+$env:DELHI_GEOGRAPHY_DIR = Join-Path $env:USERPROFILE 'Desktop/subsidence-data/delhi-c5-local-testing-candidate-0.0.3'
+python -B web/scripts/serve-e9-geography.py
+```
+
+Run the frontend from the repository root in a third terminal.
+
+```powershell
+Set-Location web
+npm.cmd run dev:e9
+```
+
+Open [the real E9 app](http://127.0.0.1:5173). This development mode pins the API to port 8002 and the geographical assets to port 8003. It requires accepted Delhi metadata and canonical ward IDs before enabling the map and authority access. Ward GeoJSON is preferred. If its transport fails, the ward PMTiles use live API colours and hover values by ID. The Grid cells control requests the selected ward from C4. Candidate cell tiles provide geometry only, and the E9 session retains all C2 cells, including the four slivers outside the candidate archive. The radar control is shown in Authority mode.
+
+For the E9 suite, stop the standalone Vite frontend with Ctrl+C and leave E9 and geography running. In the original E9 terminal:
+
+```powershell
+Set-Location (Join-Path $frontend 'web')
+$env:E9_TEST_AUTHORITY_TOKEN = $env:AUTHORITY_TOKEN
+$env:PLAYWRIGHT_CHANNEL = 'msedge'
+npm.cmd run test:e9
+Remove-Item Env:E9_TEST_AUTHORITY_TOKEN
+```
+
+The suite uses the running E9 API for ward, cell, PDF, validation and building assertions. It controls a few browser responses for failure-path checks. The Playwright Vite child receives neither token variable. Stop the geography server with Ctrl+C. In the original terminal run `Stop-Process -Id $e9Server.Id` and `Remove-Item Env:AUTHORITY_TOKEN`. Standard checks are `npm.cmd run lint`, `npm.cmd run build`, `npm.cmd run verify:assets`, and `npm.cmd test`. Use the separately documented settings for `npm.cmd run test:delhi` and `npm.cmd run test:live`.
+
 ## C11 local API integration
 
 With Python 3.11 available, run these commands from the frontend repository root to set up the sibling worktree.
@@ -78,15 +175,17 @@ Put these values in `web/.env.local` for local review or inject them at build ti
 | Variable | Value |
 | --- | --- |
 | `VITE_MOCK_MODE` | `false` |
+| `VITE_REQUIRE_REAL_DELHI` | `true` for the approved E9 release. This blocks synthetic or incompatible API metadata and uses C4 for selected-ward cell scores. |
 | `VITE_API_URL` | Person E’s matching C4 API base, including `/api/v1` |
 | `VITE_DELHI_DATA_VINTAGE` | Exact real release value returned by `/meta` in `data_vintage` |
 | `VITE_WARDS_GEOJSON_URL` | Approved Delhi 2022 GeoJSON URL with 250 named polygons or multipolygons in longitude/latitude and unique string IDs `1` through `250`. Preferred when configured. |
+| `VITE_WARD_GEOJSON_FALLBACK_URL` | Optional base URL for approved per-ward `<ward_id>.json` geometry, used to focus a selected ward while the map uses PMTiles. |
 | `VITE_WARDS_TILE_URL` | Versioned C5 ward PMTiles URL with source layer `wards`. Required if GeoJSON is unset and used as fallback if the GeoJSON cannot be loaded. |
-| `VITE_CELLS_TILE_URL` | Optional C5 cell PMTiles URL with layer `cells`. Leave blank to use the selected ward’s C4 cell endpoint, including when the delivered archive contains geometry only and a scored view is needed. |
+| `VITE_CELLS_TILE_URL` | Leave blank for E9. Other live configurations can provide a validated score-enriched C5 archive with layer `cells`. |
 | `VITE_POINTS_TILE_URL` | Optional C5 radar PMTiles URL with layer `points`. The control appears in Authority mode. Use an archive approved for URL disclosure because Vite includes this URL in the browser build. |
 | `VITE_DELHI_MAP_ATTRIBUTION` | Optional plain-text ward-source credit from the delivered manifest. The app also displays the C5 contract attribution. Use the manifest’s exact source provenance. |
 
-The API must report `city=delhi`, `n_wards=250`, and the configured vintage. Its ward list must contain all 250 canonical string IDs. A synthetic API continues to use its matching bundled ward boundaries and keeps the configured real map sources off. A loaded GeoJSON with mismatched IDs is rejected. A valid GeoJSON is coloured with the matching C4 ward metrics. Ward PMTiles use their own C5 metrics, including a score-unavailable style for unscored geometry. Cells with unknown suppression show unavailable coverage and metrics. A cell archive load failure still falls back to the selected ward’s C4 cells.
+The API must report `city=delhi`, `n_wards=250`, and the configured vintage. Its ward list must contain all 250 canonical string IDs. The synthetic live mode uses its matching bundled boundaries, while strict Delhi mode requires matching real metadata before requesting ward summaries. A loaded GeoJSON with mismatched IDs is rejected. Both ward GeoJSON and ward PMTiles use the matching C4 ward metrics. Cells with unknown suppression show unavailable coverage and metrics. A configured cell archive in legacy live mode can fall back to the selected ward's C4 cells.
 
 Use approved, versioned asset URLs for the same release as the API and confirm the C0/C5 manifests and tile QA at handoff. The [ward lineage](../data/LINEAGE.md) records GSDL Delhi as the source named by OpenCity, Vaidyanathan R as the credited contributor, and the Kaggle mirror as the origin of the candidate bytes. Use the credit and provenance for the actual delivered release.
 
@@ -147,7 +246,7 @@ Build from the complete checkout of `Gurunethra-Dev17/subsidence_risk_map`, bran
 | Output directory | `dist` relative to `web` |
 | Build environment | `VITE_MOCK_MODE=true` |
 
-Leave `VITE_API_URL`, `VITE_DELHI_DATA_VINTAGE`, `VITE_DELHI_MAP_ATTRIBUTION`, `VITE_WARDS_GEOJSON_URL`, `VITE_WARDS_TILE_URL`, `VITE_CELLS_TILE_URL`, `VITE_POINTS_TILE_URL`, and basemap overrides unset. The default OpenFreeMap HTTPS basemap supplies street context and 3D heights. All ward scores and radar observations in preview mode are fictional. The PDF workflow uses its labelled print fallback.
+Leave `VITE_REQUIRE_REAL_DELHI`, `VITE_API_URL`, `VITE_DELHI_DATA_VINTAGE`, `VITE_DELHI_MAP_ATTRIBUTION`, `VITE_WARDS_GEOJSON_URL`, `VITE_WARD_GEOJSON_FALLBACK_URL`, `VITE_WARDS_TILE_URL`, `VITE_CELLS_TILE_URL`, `VITE_POINTS_TILE_URL`, and basemap overrides unset. The default OpenFreeMap HTTPS basemap supplies street context and 3D heights. All ward scores and radar observations in preview mode are fictional. The PDF workflow uses its labelled print fallback.
 
 For [Vercel Git integration](https://vercel.com/docs/git/vercel-for-github), use the `web/` project root and enable **Include source files outside of the Root Directory in the Build Step**. Set Production branch tracking to `c/frontend` for the dedicated synthetic project and use its stable project domain for CORS. `web/vercel.json` applies the existing security and cache headers and handles SPA navigation after checking static files. Keep `/api/v1/*` and missing asset paths outside the SPA fallback. Vercel selects Node.js 26.x with the current `engines.node` range. Local Node.js 20.19+ remains supported by the repository.
 
@@ -181,13 +280,13 @@ vercel deploy --cwd $stage --scope rosh-e561
 
 Verify the preview URL before promoting the approved deployment. Signed out, check all ward IDs and source labels, representative ranks and suppression, all views, responsive widths, map interactions and API PDF bytes. Verify asset and security headers and CORS. Confirm signed-out buildings rejection, invalid-token rejection and authorized sign-out cleanup using securely supplied credentials. Then use `vercel promote <approved-preview-url> --scope rosh-e561` and repeat the checks on the stable domain. Record the previous production deployment URL beforehand. Use `vercel rollback <previous-production-deployment-url> --scope rosh-e561` if the promoted release fails. [Vercel deploy](https://vercel.com/docs/cli/deploy) · [Vercel rollback](https://vercel.com/docs/cli/rollback)
 
-To build the local baseline in a separate directory, run this from the repository root:
+To build the pre-E9 frontend checkpoint in a separate directory, run the following from the repository root.
 
 ```powershell
-$baseline = Join-Path ([System.IO.Path]::GetTempPath()) ('subsidence-839e576-' + [guid]::NewGuid())
+$baseline = Join-Path ([System.IO.Path]::GetTempPath()) ('subsidence-cc824c3-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $baseline
 $archive = Join-Path $baseline 'baseline.zip'
-git archive --format=zip --output=$archive 839e576
+git archive --format=zip --output=$archive cc824c3
 Expand-Archive -LiteralPath $archive -DestinationPath $baseline
 Push-Location (Join-Path $baseline 'web')
 npm.cmd ci --engine-strict
@@ -196,4 +295,4 @@ npm.cmd run verify:assets
 Pop-Location
 ```
 
-To restore this checkout after saving the current patch and new files, use `git restore --source=839e576 --worktree -- <reviewed modified files>` and move the new files to a backup folder. Run `git status --short --branch` to verify the result.
+To restore this checkout after saving the current patch and new files, use `git restore --source=cc824c3 --worktree -- <reviewed modified files>` and move the new files to a backup folder. Run `git status --short --branch` to verify the result.

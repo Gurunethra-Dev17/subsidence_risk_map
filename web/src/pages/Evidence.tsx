@@ -1,6 +1,6 @@
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import type { components } from '../../types/openapi'
-import { isSyntheticDataset } from '../api/service'
+import { isAcceptedDelhiDataset, isSyntheticDataset } from '../api/service'
 import ChartFrame from '../panels/ChartFrame'
 import { viewHref } from './workspaceNavigation'
 import { config } from '../config'
@@ -65,7 +65,8 @@ function Methodology({ meta }: { meta?: Api['MetaResponse'] }) {
     ['Minimum radar observations', params?.min_points, ''],
     ['Footprint buffer', params?.footprint_buffer_m, ' m'],
     ['Constant-rate horizon', params?.horizon_years, ' years'],
-    ['Random seed', params?.seed, ''],
+    // C4 copies C2 params. The accepted C6 declares the seed at the top level.
+    ['Random seed', params?.seed ?? (isAcceptedDelhiDataset(meta) ? 42 : null), ''],
     ['Weight perturbations', params?.sens_draws, ''],
     ['Dirichlet concentration', params?.sens_concentration, ''],
     ['Minimum ward VLM coverage', numeric(params?.coverage_min) ? params.coverage_min * 100 : null, '%'],
@@ -85,7 +86,7 @@ function Methodology({ meta }: { meta?: Api['MetaResponse'] }) {
         })}
       </div>
       <p>Median vertical motion adds context. Negative values indicate sinking. A ward with insufficient coverage receives no score or rank. Small cell samples are suppressed.</p>
-      {config.internal && meta && <p>Groundwater assessment units lack a verified ward boundary match. For a ward with all three other indicators, effective weights are {(['i1', 'i2', 'i3'] as const).map((id) => `${id.toUpperCase()} ${(100 * meta.weights[id] / (meta.weights.i1 + meta.weights.i2 + meta.weights.i3)).toFixed(2)}%`).join(', ')}. Coverage divides buildings with usable VLM by all assigned buildings. A cell crossing a ward boundary belongs to the ward with the largest area of intersection.</p>}
+      {isAcceptedDelhiDataset(meta) && meta && <p>Groundwater assessment units lack a verified ward boundary match. For a ward with all three other indicators, effective weights are {(['i1', 'i2', 'i3'] as const).map((id) => `${id.toUpperCase()} ${(100 * meta.weights[id] / (meta.weights.i1 + meta.weights.i2 + meta.weights.i3)).toFixed(2)}%`).join(', ')}, and I4 is 0%. Coverage divides buildings with usable VLM by all assigned buildings. A cell crossing a ward boundary belongs to the ward with the largest area of intersection.</p>}
     </section>
     <EngineMethod meta={meta} />
     {!isSyntheticDataset(meta) && meta && <section className="evidence-section">
@@ -127,7 +128,7 @@ function Validation({ data, meta }: { data: Api['ValidationSummary']; meta?: Api
     <section className="evidence-section">
       <h2>Collapse catalogue coverage</h2>
       <MetricChart label="Incidents" rows={[
-        { name: 'Full catalogue', value: incidents.n_incidents_total }, { name: config.internal ? 'Source city label' : 'In city', value: incidents.n_in_city },
+        { name: 'Full catalogue', value: incidents.n_incidents_total }, { name: isAcceptedDelhiDataset(meta) ? 'Source city label' : 'In city', value: incidents.n_in_city },
       ]} />
       <p>{incidents.note}</p>
     </section>
@@ -178,7 +179,7 @@ export default function Evidence({ page, meta, validation, validationError, retr
 }) {
   return <div className="evidence-page">
     <header><h1>Methods &amp; Evidence</h1>
-      <p>{config.internal ? 'Internal Delhi candidate preview' : isSyntheticDataset(meta) ? 'Synthetic demo data · counts and settings demonstrate the workflow.' : 'Contract-backed city evidence and coverage.'}</p>
+      <p>{config.e9 ? 'Internal Delhi · E9 API' : config.internal ? 'Internal Delhi candidate preview' : isSyntheticDataset(meta) ? 'Synthetic demo data · counts and settings demonstrate the workflow.' : 'Contract-backed city evidence and coverage.'}</p>
     </header>
     <nav className="section-nav" aria-label="Evidence sections">
       {(['methods', 'validation', 'limitations'] as const).map((section) =>

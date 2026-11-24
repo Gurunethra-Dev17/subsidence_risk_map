@@ -67,7 +67,7 @@ export default function InspectionBrief({ ward, meta }: {
         <header>
           <span className="brief-kicker">Subsidence Risk Map · Ward screening</span>
           <h2>{ward.ward_name}</h2>
-          <p>{ward.ward_id} · {meta?.city ?? 'City unavailable'} · {config.internal ? 'Internal Delhi candidate preview' : isSyntheticDataset(meta) ? 'Synthetic demonstration' : 'Public ward summary'}</p>
+          <p>{ward.ward_id} · {meta?.city ?? 'City unavailable'} · {config.e9 ? 'Internal Delhi · E9 API' : config.internal ? 'Internal Delhi candidate preview' : isSyntheticDataset(meta) ? 'Synthetic demonstration' : 'Public ward summary'}</p>
         </header>
         <dl className="brief-metrics">
           <div><dt>Priority band</dt><dd>{priority.label}</dd></div>

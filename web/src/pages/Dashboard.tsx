@@ -48,7 +48,12 @@ async function listAllWards(service: DataService, signal: AbortSignal) {
   do {
     const page = await service.listWards({ sort: 'rank', order: 'asc', limit: 500, offset: wards.length }, signal)
     wards.push(...page.items)
-    if (wards.length >= page.total || page.items.length === 0) return wards
+    if (wards.length >= page.total || page.items.length === 0) {
+      if (config.requireReal && !hasDelhiWardIds(wards.map((ward) => ward.ward_id))) {
+        throw new Error('The API ward list does not contain all 250 canonical Delhi IDs.')
+      }
+      return wards
+    }
   } while (!signal.aborted)
   signal.throwIfAborted()
   return wards
@@ -99,11 +104,12 @@ export default function Dashboard() {
 
   const meta = useResource(loadMeta)
   const health = useResource(loadHealth, !config.mock)
-  const wards = useResource(listAllWards)
   const city = meta.state.status === 'ready' ? meta.state.data : undefined
+  const useApiData = !config.requireReal || Boolean(city)
+  const wards = useResource(listAllWards, useApiData)
   const synthetic = isSyntheticDataset(city)
   const entries = wards.state.status === 'ready' ? wards.state.data : undefined
-  const useFixtureBoundaries = !config.internal && (config.mock || (synthetic && city?.city === 'delhi'))
+  const useFixtureBoundaries = !config.internal && !config.requireReal && (config.mock || (synthetic && city?.city === 'delhi'))
   const realMetadataMatches = !synthetic && city?.city === 'delhi' && city.n_wards === delhiWardCount &&
     (config.internal || (Boolean(config.delhiVintage) && city.data_vintage === config.delhiVintage))
   const realDatasetMatches = useMemo(() => realMetadataMatches && Boolean(entries && hasDelhiWardIds(entries.map((ward) => ward.ward_id))),
@@ -111,7 +117,7 @@ export default function Dashboard() {
   const useRealGeoJson = realDatasetMatches && Boolean(config.wardGeoJson)
   const fixture = useResource(getSyntheticWardGeometry, useFixtureBoundaries && (mapOpened || isOverview))
   const boundaries = useResource(loadRealBoundaries, useRealGeoJson && (mapOpened || isOverview))
-  const validation = useResource(loadValidation, readEvidence)
+  const validation = useResource(loadValidation, readEvidence && useApiData)
   const [appearance, setAppearance] = useState<'light' | 'dark'>(() => {
     try { return localStorage.getItem('map-appearance') === 'dark' ? 'dark' : 'light' }
     catch { return 'light' }
@@ -177,6 +183,7 @@ export default function Dashboard() {
   }, [compatibleGeometry, entries, fixtureGeometry])
   const realGeoJsonError = useRealGeoJson && boundaries.state.status === 'error' ? boundaries.state.error : undefined
   const wardTiles = realDatasetMatches && (!useRealGeoJson || realGeoJsonError) ? config.wardTiles : undefined
+  const tileWards = useMemo(() => wardTiles && entries ? new Map(entries.map((ward) => [ward.ward_id, ward])) : undefined, [wardTiles, entries])
   const mapPending = meta.state.status === 'loading' ||
     (useFixtureBoundaries && (fixture.state.status === 'loading' || (!config.mock && wards.state.status === 'loading'))) ||
     (hasRealMapSources && realMetadataMatches && wards.state.status === 'loading') ||
@@ -216,7 +223,8 @@ export default function Dashboard() {
             <a className="header-button evidence-link" href={viewHref('methods')} aria-current={isEvidence ? 'location' : undefined}><BookOpen size={15} /> Methods &amp; Evidence</a>
             <button type="button" className="header-button appearance-control" aria-label={appearance === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'}
               onClick={() => setAppearance((value) => value === 'dark' ? 'light' : 'dark')}>{appearance === 'dark' ? <Sun size={17} /> : <Moon size={17} />}</button>
-            <AuthorityAccess session={authority} signIn={signIn} signOut={() => signOut()} />
+            <AuthorityAccess session={authority} signIn={signIn} signOut={() => signOut()}
+              available={!config.requireReal || realDatasetMatches} />
           </div>
         </div>
       </header>
@@ -228,7 +236,7 @@ export default function Dashboard() {
           <div>
             <h1><Activity size={21} /> {city?.city ?? 'City'} monitoring</h1>
             <div className="source-status">{synthetic ? <FlaskConical size={14} /> : <Activity size={14} />}
-              <strong>{config.internal ? 'Internal Delhi candidate preview' : config.mock ? 'Synthetic data preview' : synthetic ? 'Live API · synthetic demo data' : 'Live API'}</strong>
+              <strong>{config.e9 ? 'Internal Delhi · E9 API' : config.internal ? 'Internal Delhi candidate preview' : config.mock ? 'Synthetic data preview' : synthetic ? 'Live API · synthetic demo data' : 'Live API'}</strong>
               <span>{config.mock ? 'Fictional ward scores, boundaries and radar observations' : synthetic ? 'Fictional ward metrics and boundaries' : city?.data_vintage}</span>
               {!config.mock && <span role="status">{health.state.status === 'ready' ? `API reachable · ${health.state.data.version}`
                 : health.state.status === 'error' ? 'API health check failed' : 'Checking API health…'}</span>}
@@ -263,7 +271,7 @@ export default function Dashboard() {
               ) : mapPending ? <p className="map-message" role="status">Loading ward map…</p> : (
                 <Suspense fallback={<p className="map-message" role="status">Loading map…</p>}>
                   <MapWorkspace key={`${wards.attempt}:${fixture.attempt}:${boundaries.attempt}:${wardTiles ?? ''}`}
-                    geometry={mapGeometry} wardTiles={wardTiles} realMap={renderRealMap} selection={selection} onSelect={onSelect} appearance={appearance}
+                    geometry={mapGeometry} wardTiles={wardTiles} tileWards={tileWards} realMap={renderRealMap} selection={selection} onSelect={onSelect} appearance={appearance}
                     visible={isOverview} onFeatureChange={setMapFeature} authority={authority} onUnauthorized={unauthorized} />
                 </Suspense>
               )}
@@ -271,7 +279,7 @@ export default function Dashboard() {
             <MapLegend />
             <p className="map-caption">City-relative inspection priority <a className="text-button" href={viewHref('methods')}>How to read the index</a></p>
             {renderRealMap && <p className="map-caption">{c5Attribution}
-              {config.internal && ' · Delhi ward source: Geospatial Delhi Limited (GSDL Delhi). OpenCity credit: Vaidyanathan R. Candidate bytes from the Kaggle mirror.'}
+              {(config.internal || config.e9) && ' · Delhi ward source: Geospatial Delhi Limited (GSDL Delhi). OpenCity credit: Vaidyanathan R. Candidate bytes from the Kaggle mirror.'}
               {config.delhiAttribution && ` · ${config.delhiAttribution}`}</p>}
           </section>
 
@@ -280,7 +288,8 @@ export default function Dashboard() {
               collapsed={rankingsCollapsed} onCollapse={() => setRankingsCollapsed((value) => !value)} /> : (
               <section className="panel" id="rankings" aria-labelledby="ranking-title">
                 <div className="panel-heading"><h2 id="ranking-title">Ward rankings</h2></div>
-                {wards.state.status === 'loading' ? <p className="panel-state" role="status">Loading ward rankings…</p>
+                {!useApiData && meta.state.status === 'error' ? <p className="panel-state">Ward rankings require the verified Delhi API.</p>
+                  : wards.state.status === 'loading' ? <p className="panel-state" role="status">Loading ward rankings…</p>
                   : <FailedState label="Ward rankings" error={wards.state.error} retry={wards.retry} />}
               </section>
             )}
@@ -308,7 +317,7 @@ export default function Dashboard() {
           <header className="detail-heading">
             <div>
               <h1>{page === 'inspector' ? 'Ward Inspector' : 'Inspection Brief'}</h1>
-              <p className="source-status"><strong>{config.internal ? 'Internal Delhi candidate preview' : synthetic ? 'Synthetic data preview' : 'Public ward summary'}</strong>{city?.data_vintage && <span>{city.data_vintage}</span>}</p>
+              <p className="source-status"><strong>{config.e9 ? 'Internal Delhi · E9 API' : config.internal ? 'Internal Delhi candidate preview' : synthetic ? 'Synthetic data preview' : 'Public ward summary'}</strong>{city?.data_vintage && <span>{city.data_vintage}</span>}</p>
             </div>
             <div className="view-actions">
               <a className="secondary-button" href={viewHref('map')}>Back to Overview Map</a>
@@ -325,7 +334,8 @@ export default function Dashboard() {
               <option value="">Choose a ward</option>
               {entries?.map((ward) => <option key={ward.ward_id} value={ward.ward_id}>{ward.ward_name} · {ward.ward_id}</option>)}
             </select></label>
-            {wards.state.status === 'error' ? <FailedState label="Ward list" error={wards.state.error} retry={wards.retry} />
+            {!useApiData && meta.state.status === 'error' ? <FailedState label="Ward list" error={meta.state.error} retry={meta.retry} />
+              : wards.state.status === 'error' ? <FailedState label="Ward list" error={wards.state.error} retry={wards.retry} />
               : wards.state.status === 'loading' ? <p className="muted-copy" role="status">Loading ward list…</p>
                 : entries?.length === 0 ? <p className="muted-copy">No ward summaries are available.</p> : null}
           </div>
@@ -340,7 +350,8 @@ export default function Dashboard() {
 
         {isEvidence && <Suspense fallback={<p role="status">Loading evidence…</p>}>
           <Evidence page={page} meta={city} validation={validation.state.status === 'ready' ? validation.state.data : undefined}
-            validationError={validation.state.status === 'error' ? validation.state.error : undefined} retry={validation.retry}
+            validationError={!useApiData && meta.state.status === 'error' ? meta.state.error
+              : validation.state.status === 'error' ? validation.state.error : undefined} retry={useApiData ? validation.retry : meta.retry}
             mapAttribution={realDatasetMatches ? [c5Attribution, config.delhiAttribution].filter(Boolean).join(' · ') : undefined} />
         </Suspense>}
       </main>

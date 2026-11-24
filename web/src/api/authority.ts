@@ -42,7 +42,9 @@ export async function openAuthority(token: string, signal: AbortSignal): Promise
       throw new AuthorityError(0, 'The authority service could not be reached.')
     }
     if (!response.ok) throw new AuthorityError(response.status,
-      response.status === 401 || response.status === 403 ? 'The server rejected authority access.' : 'The authority service could not complete the request.')
+      response.status === 401 || response.status === 403 ? 'The server rejected authority access.'
+        : response.status === 429 ? 'The authority service is busy. Wait a moment and try again.'
+          : 'The authority service could not complete the request.')
     const body: BuildingGeometry = await response.json().catch(() => {
       throw new AuthorityError(502, 'The authority service did not return a building collection.')
     })

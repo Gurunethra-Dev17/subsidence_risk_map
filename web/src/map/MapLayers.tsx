@@ -2,8 +2,8 @@ import { memo, useLayoutEffect, useRef, useState } from 'react'
 import { Layers3 } from 'lucide-react'
 import type { Map as MapLibreMap, SourceSpecification } from 'maplibre-gl'
 import type { Feature, FeatureCollection, Geometry } from 'geojson'
-import { getDataService } from '../api/service'
-import { isUnauthorized } from '../api/authorityErrors'
+import { DataServiceError, getDataService } from '../api/service'
+import { AuthorityError, isUnauthorized } from '../api/authorityErrors'
 import type { AuthoritySession } from '../api/authority'
 import { config } from '../config'
 import { makeOverlayLayers, overlayHitLayers, overlayLayerId, overlayLegends, overlaySelection, overlaySettings, overlaySourceId } from './overlayLayers'
@@ -11,7 +11,7 @@ import type { OverlayKey } from './overlayLayers'
 import { selectedLine } from './wardLayers'
 
 type Viewport = { zoom: number; bbox: string }
-type LayerStatus = 'off' | 'zoom' | 'loading' | 'empty' | 'ready' | 'unavailable' | 'error'
+type LayerStatus = 'off' | 'zoom' | 'loading' | 'empty' | 'ready' | 'unavailable' | 'error' | 'busy'
 
 function readViewport(map: MapLibreMap): Viewport {
   const { lng: west, lat: south } = map.getBounds().getSouthWest().wrap()
@@ -37,7 +37,7 @@ function LayerToggle({ layer, map, view, wardId, realMap, authority, onUnauthori
   const [attempt, setAttempt] = useState(0)
   const opacityRef = useRef(opacity)
   const spec = overlaySettings[layer]
-  const archive = !realMap ? undefined : layer === 'cells' ? config.cellTiles : layer === 'points' ? config.pointTiles : undefined
+  const archive = !realMap ? undefined : layer === 'cells' && !config.requireReal ? config.cellTiles : layer === 'points' ? config.pointTiles : undefined
   const buildingView = layer === 'buildings' ? view?.bbox : undefined
   const cellWard = layer === 'cells' && !config.mock && (!archive || fallback) ? wardId : null
   const atZoom = Boolean(view && view.zoom >= spec.zoom)
@@ -62,7 +62,7 @@ function LayerToggle({ layer, map, view, wardId, realMap, authority, onUnauthori
         onHide(layer)
         setFallback(true)
       }
-      else setStatus('error')
+      else setStatus((error instanceof AuthorityError || error instanceof DataServiceError) && error.status === 429 ? 'busy' : 'error')
     }
 
     async function install(current: MapLibreMap) {
@@ -119,8 +119,10 @@ function LayerToggle({ layer, map, view, wardId, realMap, authority, onUnauthori
     map.on('error', onError)
     map.on('sourcedata', onSource)
     map.on('idle', onIdle)
-    void install(map).catch(failed)
+    const timer = session ? window.setTimeout(() => void install(map).catch(failed), 400) : undefined
+    if (!session) void install(map).catch(failed)
     return () => {
+      window.clearTimeout(timer)
       controller.abort()
       map.off('error', onError)
       map.off('sourcedata', onSource)
@@ -153,6 +155,7 @@ function LayerToggle({ layer, map, view, wardId, realMap, authority, onUnauthori
     ready: layer === 'buildings' ? 'Viewport query · up to 500 buildings' : spec.description,
     unavailable: layer === 'cells' && !config.mock && !cellWard ? 'Select a ward for API cells' : 'No source is configured for this layer',
     error: 'Layer could not be loaded',
+    busy: 'The data service is busy. Wait a moment and retry the layer.',
   }[enabled ? status : 'off']
 
   return <div className="layer-row">
@@ -169,7 +172,7 @@ function LayerToggle({ layer, map, view, wardId, realMap, authority, onUnauthori
       </li>)}
     </ul>}
     {enabled && fallback && <p>Archive unavailable · using the API fallback</p>}
-    {enabled && status === 'error' && <button type="button" className="text-button" onClick={() => { setFallback(false); setAttempt((count) => count + 1) }}>Retry layer</button>}
+    {enabled && (status === 'error' || status === 'busy') && <button type="button" className="text-button" onClick={() => { setFallback(false); setAttempt((count) => count + 1) }}>Retry layer</button>}
   </div>
 }
 

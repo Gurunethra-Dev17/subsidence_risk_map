@@ -10,6 +10,7 @@
     "dev": "vite --strictPort",
     "dev:live": "vite --strictPort --host localhost --port 5173 --mode c11",
     "dev:delhi": "vite --strictPort --port 5173 --mode delhi-preview",
+    "dev:e9": "vite --strictPort --port 5173 --mode delhi-e9",
     "generate:types": "node scripts/generate-types.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
@@ -17,6 +18,7 @@
     "test": "playwright test",
     "test:live": "playwright test --config playwright.live.config.ts",
     "test:delhi": "playwright test --config playwright.delhi.config.ts",
+    "test:e9": "playwright test --config playwright.e9.config.ts",
     "verify:assets": "node scripts/verify-assets.mjs",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --strictPort"

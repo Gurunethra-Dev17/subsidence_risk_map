@@ -60,21 +60,32 @@ function publicFixtures(): Plugin {
 
 export default defineConfig(({ command, mode, isPreview }) => {
   const internal = mode === 'delhi-preview'
-  if (internal && (command !== 'serve' || isPreview)) throw new Error('Delhi preview is available only through the Vite development server.')
+  const e9 = mode === 'delhi-e9'
+  if ((internal || e9) && (command !== 'serve' || isPreview)) throw new Error('Delhi preview is available only through the Vite development server.')
   const env = loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)))
   if (Object.keys(env).some((key) => /(?:TOKEN|SECRET|PASSWORD)/i.test(key))) {
     throw new Error('Keep credentials out of all VITE_* configuration.')
   }
-  for (const key of ['VITE_MOCK_MODE', 'VITE_BASEMAP_ENABLED']) {
+  for (const key of ['VITE_MOCK_MODE', 'VITE_BASEMAP_ENABLED', 'VITE_REQUIRE_REAL_DELHI']) {
     if (env[key]?.trim() && !/^(true|false)$/i.test(env[key].trim())) throw new Error(`${key} must be true or false.`)
   }
-  for (const key of ['VITE_API_URL', 'VITE_WARDS_GEOJSON_URL', 'VITE_WARDS_TILE_URL', 'VITE_CELLS_TILE_URL', 'VITE_POINTS_TILE_URL', 'VITE_BASEMAP_TILE_URL', 'VITE_BASEMAP_STYLE_URL']) {
+  for (const key of ['VITE_API_URL', 'VITE_WARDS_GEOJSON_URL', 'VITE_WARD_GEOJSON_FALLBACK_URL', 'VITE_WARDS_TILE_URL', 'VITE_CELLS_TILE_URL', 'VITE_POINTS_TILE_URL', 'VITE_BASEMAP_TILE_URL', 'VITE_BASEMAP_STYLE_URL']) {
     if (!env[key]?.trim()) continue
-    try { publicHttpUrl(env[key].trim(), 'https://frontend.invalid/') }
+    let url: URL
+    try { url = publicHttpUrl(env[key].trim(), 'https://frontend.invalid/') }
     catch { throw new Error(`${key} must be a relative, HTTPS or loopback URL without credentials.`) }
+    if (command === 'build' && env.VITE_REQUIRE_REAL_DELHI?.trim().toLowerCase() === 'true' &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
+      throw new Error(`${key} cannot point to loopback in a real Delhi production build.`)
+    }
   }
   return {
-  plugins: [react(), publicFixtures(), ...(internal ? [delhiPreview()] : [])],
+  plugins: [react(), publicFixtures(), ...(internal ? [delhiPreview()] : []), ...(e9 ? [{
+    name: 'delhi-e9-loopback',
+    configResolved(resolved) {
+      if (resolved.server.host !== '127.0.0.1') throw new Error('The E9 preview requires an IPv4 loopback host.')
+    },
+  } satisfies Plugin] : [])],
   worker: { format: 'es' },
   build: {
     rollupOptions: {
@@ -86,7 +97,7 @@ export default defineConfig(({ command, mode, isPreview }) => {
     },
   },
   server: {
-    ...(internal ? { host: '127.0.0.1', cors: false } : {}),
+    ...(internal || e9 ? { host: '127.0.0.1', cors: false } : {}),
     // The browser can only access web/. The plugin reads the selected fixtures in Node.
     fs: { allow: [fileURLToPath(new URL('.', import.meta.url))] },
     watch: { ignored: ['**/.npm-cache/**'] },

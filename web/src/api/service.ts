@@ -36,6 +36,10 @@ export function isSyntheticDataset(meta?: Api['MetaResponse']) {
   return config.mock || (typeof meta?.data_vintage === 'string' && meta.data_vintage.trim().toLowerCase() === 'synthetic')
 }
 
+export function isAcceptedDelhiDataset(meta?: Api['MetaResponse']) {
+  return meta?.city === 'delhi' && meta.data_vintage === 'delhi-candidate-0.0.1' && meta.engine_version === 'f3af18a'
+}
+
 export async function getSyntheticWardGeometry(): Promise<WardGeometry> {
   return (await import('./mock')).syntheticWardGeometry
 }
@@ -52,7 +56,8 @@ async function request(path: string, accept: string, signal?: AbortSignal) {
     const message = body?.error?.message
     throw new DataServiceError(
       response.status,
-      typeof message === 'string' ? message : `Request failed (HTTP ${response.status}).`,
+      response.status === 429 ? 'The data service is busy. Wait a moment and try again.'
+        : typeof message === 'string' ? message : `Request failed (HTTP ${response.status}).`,
       body?.error?.code,
     )
   }
@@ -65,10 +70,17 @@ async function json<T>(path: string, signal?: AbortSignal, accept = 'application
 
 const wardPath = (wardId: string) => `/wards/${encodeURIComponent(wardId)}`
 const wardCache = new Map<string, { ward: Ward; expires: number }>()
-const previewCells = new Map<string, Api['CellFeatureCollection']>()
+const cellCache = new Map<string, { cells: Api['CellFeatureCollection']; expires: number }>()
 
 const liveService: DataService = {
-  getMeta: (signal) => json('/meta', signal),
+  async getMeta(signal) {
+    const meta = await json<Api['MetaResponse']>('/meta', signal)
+    if (config.requireReal && (isSyntheticDataset(meta) || meta.city !== 'delhi' || meta.n_wards !== 250 ||
+      !config.delhiVintage || meta.data_vintage !== config.delhiVintage || (config.e9 && !isAcceptedDelhiDataset(meta)))) {
+      throw new DataServiceError(409, 'The API does not serve the configured real Delhi dataset.')
+    }
+    return meta
+  },
   listWards(query, signal) {
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query ?? {})) {
@@ -90,17 +102,15 @@ const liveService: DataService = {
   },
   async getWardCells(wardId, signal) {
     signal?.throwIfAborted()
-    const cached = previewCells.get(wardId)
-    if (cached) return cached
+    const cached = cellCache.get(wardId)
+    if (cached && cached.expires > Date.now()) return cached.cells
     const cells = await json<Api['CellFeatureCollection']>(`${wardPath(wardId)}/cells`, signal, 'application/geo+json, application/json')
-    if (config.internal) {
-      signal?.throwIfAborted()
-      if (previewCells.size >= 12) {
-        const oldest = previewCells.keys().next().value
-        if (oldest !== undefined) previewCells.delete(oldest)
-      }
-      previewCells.set(wardId, cells)
+    signal?.throwIfAborted()
+    if (cellCache.size >= 12) {
+      const oldest = cellCache.keys().next().value
+      if (oldest !== undefined) cellCache.delete(oldest)
     }
+    cellCache.set(wardId, { cells, expires: Date.now() + 60_000 })
     return cells
   },
   async getWardBrief(wardId, signal) {

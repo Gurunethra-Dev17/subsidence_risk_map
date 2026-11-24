@@ -4,7 +4,7 @@ import type { Ward } from '../api/service'
 import { overlaySettings } from '../map/overlayLayers'
 import type { MapFeature } from '../map/overlayLayers'
 import { flagLabels, formatNumber, rankRange, scoreBand, showNumber } from '../wardMetrics'
-import { config } from '../config'
+import { isAcceptedDelhiDataset } from '../api/service'
 import type { components } from '../../types/openapi'
 
 const DistortionHistogram = lazy(() => import('./DistortionHistogram'))
@@ -18,7 +18,7 @@ function Explanation({ label, text }: { label: string; text: string }) {
   )
 }
 
-function Indicators({ ward }: { ward: Ward }) {
+function Indicators({ ward, accepted }: { ward: Ward; accepted: boolean }) {
   const share = ward.share_sinking_gt4
   const ratio = ward.beta_p90_ratio_horizon
   const beta = ward.beta_p90_horizon
@@ -40,7 +40,7 @@ function Indicators({ ward }: { ward: Ward }) {
         ))}
         {ward.gw_category && <div><dt>Groundwater category</dt><dd className="capitalize">{ward.gw_category}</dd></div>}
       </dl>
-      {config.internal && ward.gw_stage_pct == null && <p className="muted-copy">Groundwater assessment-unit boundaries could not be reliably matched to wards.</p>}
+      {accepted && ward.gw_stage_pct == null && <p className="muted-copy">Groundwater assessment-unit boundaries could not be reliably matched to wards.</p>}
     </section>
   )
 }
@@ -72,7 +72,7 @@ function Quality({ ward, rankedCount }: { ward: Ward; rankedCount?: number }) {
   )
 }
 
-function WardAnalytics({ ward, rankedCount }: { ward: Ward; rankedCount?: number }) {
+function WardAnalytics({ ward, rankedCount, accepted }: { ward: Ward; rankedCount?: number; accepted: boolean }) {
   const priority = scoreBand(ward.status, ward.score)
   return (
     <>
@@ -86,7 +86,7 @@ function WardAnalytics({ ward, rankedCount }: { ward: Ward; rankedCount?: number
         {ward.status === 'insufficient_data' && <p className="insufficient-message">Available coverage is insufficient to assign a score or rank.</p>}
       </div>
       <div className="analytics-grid">
-        <Indicators ward={ward} />
+        <Indicators ward={ward} accepted={accepted} />
         <Quality ward={ward} rankedCount={rankedCount} />
       </div>
       <section className="inspector-section" aria-labelledby="histogram-heading">
@@ -97,7 +97,7 @@ function WardAnalytics({ ward, rankedCount }: { ward: Ward; rankedCount?: number
         <Suspense fallback={<p className="muted-copy" role="status">Loading distribution…</p>}>
           <DistortionHistogram histogram={ward.histogram} />
         </Suspense>
-        {config.internal && ward.histogram == null && <p className="muted-copy">The C2 export has no agreed histogram bins or denominator.</p>}
+        {accepted && ward.histogram == null && <p className="muted-copy">The C2 export has no agreed histogram bins or denominator.</p>}
       </section>
     </>
   )
@@ -114,7 +114,7 @@ export default function WardInspector({ ward, meta, feature }: {
         <span className="section-icon"><ScanLine size={18} /></span>
         <div><h2 id="inspector-title">{ward.ward_name}</h2><p className="muted-copy">{ward.ward_id}</p></div>
       </div>
-      <WardAnalytics ward={ward} rankedCount={meta?.n_ranked} />
+      <WardAnalytics ward={ward} rankedCount={meta?.n_ranked} accepted={isAcceptedDelhiDataset(meta)} />
       <section className="inspector-section" aria-labelledby="feature-heading">
         <h3 id="feature-heading">Map feature evidence</h3>
         {feature ? <>

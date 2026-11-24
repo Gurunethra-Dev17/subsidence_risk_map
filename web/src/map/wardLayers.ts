@@ -1,7 +1,8 @@
 import { LngLatBounds } from 'maplibre-gl'
 import type { ExpressionSpecification, FilterSpecification, LayerSpecification } from 'maplibre-gl'
 import type { MultiPolygon, Polygon } from 'geojson'
-import { insufficientBand, scoreBands, unavailableBand } from '../wardMetrics'
+import type { Ward } from '../api/service'
+import { insufficientBand, scoreBand, scoreBands, unavailableBand } from '../wardMetrics'
 
 export const wardSource = 'inspection-wards'
 export const wardFill = 'inspection-ward-fill'
@@ -32,7 +33,7 @@ export function hatchImage() {
   return image
 }
 
-export function wardLayers(vector: boolean): LayerSpecification[] {
+export function wardLayers(vector: boolean, tileWards?: ReadonlyMap<string, Ward>): LayerSpecification[] {
   const source = { source: wardSource, ...(vector ? { 'source-layer': 'wards' } : {}) }
   const fillColor: ExpressionSpecification = [
     'case', insufficient, insufficientBand.color,
@@ -40,9 +41,24 @@ export function wardLayers(vector: boolean): LayerSpecification[] {
     ['step', ['number', ['get', 'score']], scoreBands[0].color,
       scoreBands[1].min, scoreBands[1].color, scoreBands[2].min, scoreBands[2].color],
   ]
+  const byColor = new Map<string, string[]>()
+  for (const ward of tileWards?.values() ?? []) {
+    const color = scoreBand(ward.status, ward.score).color
+    const ids = byColor.get(color) ?? []
+    ids.push(ward.ward_id)
+    byColor.set(color, ids)
+  }
+  const [first, ...rest] = [...byColor]
+  const paint: ExpressionSpecification | string = tileWards ? first
+    ? ['match', ['get', 'ward_id'], first[1], first[0], ...rest.flatMap(([color, ids]) => [ids, color]), unavailableBand.color]
+    : unavailableBand.color
+    : fillColor
+  const hatchFilter: FilterSpecification = tileWards
+    ? ['in', ['get', 'ward_id'], ['literal', byColor.get(insufficientBand.color) ?? []]]
+    : insufficient
   return [
-    { id: wardFill, type: 'fill', ...source, paint: { 'fill-color': fillColor, 'fill-opacity': 0.57 } },
-    { id: 'inspection-ward-hatch', type: 'fill', ...source, filter: insufficient,
+    { id: wardFill, type: 'fill', ...source, paint: { 'fill-color': paint, 'fill-opacity': 0.57 } },
+    { id: 'inspection-ward-hatch', type: 'fill', ...source, filter: hatchFilter,
       paint: { 'fill-pattern': hatch } },
     { id: 'inspection-ward-outline', type: 'line', ...source,
       paint: { 'line-color': '#344960', 'line-opacity': 0.8, 'line-width': 1.4 } },

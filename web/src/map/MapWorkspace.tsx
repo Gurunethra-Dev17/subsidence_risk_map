@@ -4,9 +4,9 @@ import type { MapMouseEvent, SourceSpecification } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { LocateFixed, RotateCcw, RotateCw, X } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import type { WardGeometry } from '../api/service'
+import type { Ward, WardGeometry } from '../api/service'
 import type { AuthoritySession } from '../api/authority'
-import { isDelhiWardId } from '../api/delhiMap'
+import { isDelhiWardId, loadDelhiWardGeometry } from '../api/delhiMap'
 import { config } from '../config'
 import { scoreBand, showNumber } from '../wardMetrics'
 import { loadBasemap, neutralBasemap } from './basemap'
@@ -50,10 +50,11 @@ function hitTest(map: MapLibreMap, event: MapMouseEvent) {
   return { ward }
 }
 
-export default function MapWorkspace({ geometry, wardTiles, realMap, selection, onSelect, authority, onUnauthorized, appearance,
+export default function MapWorkspace({ geometry, wardTiles, tileWards, realMap, selection, onSelect, authority, onUnauthorized, appearance,
   visible = true, onFeatureChange }: {
   geometry: WardGeometry | null
   wardTiles?: string
+  tileWards?: ReadonlyMap<string, Ward>
   realMap: boolean
   selection: Selection | null
   onSelect: (id: string, origin: Selection['origin']) => void
@@ -177,6 +178,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
       current.on('webglcontextlost', reportError)
       current.on('error', (event) => {
         const sourceId = 'sourceId' in event ? event.sourceId : undefined
+        if ((event.error as Error | undefined)?.name === 'AbortError') return
         if (controller.signal.aborted || (typeof sourceId === 'string' && sourceId.startsWith('overlay-'))) return
         if (sourceId === wardSource && tiles) reportArchiveError('The configured Delhi ward PMTiles could not be loaded.')
         else if (sourceId === wardSource || installingWards) reportError()
@@ -189,7 +191,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
           current.addSource(wardSource, source)
           current.addImage(hatchId, hatchImage())
           const labels = current.getStyle().layers.find((layer) => layer.type === 'symbol')?.id
-          for (const layer of wardLayers(Boolean(tiles))) current.addLayer(layer, labels)
+          for (const layer of wardLayers(Boolean(tiles), tileWards)) current.addLayer(layer, labels)
           setInstance(current)
           setLayerMap(current)
         } catch {
@@ -209,7 +211,8 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
         hoverFrame = requestAnimationFrame(() => {
           hoverFrame = 0
           if (!lastPointer) return
-          const { feature, ward } = hitTest(current, lastPointer)
+          const { feature, ward: tileWard } = hitTest(current, lastPointer)
+          const ward = tileWards ? tileWards.get(tileWard?.ward_id) : tileWard
           current.getCanvas().style.cursor = feature || ward ? 'pointer' : ''
           const { x, y } = lastPointer.point
           if (feature) {
@@ -252,7 +255,7 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
       lastFocused.current = null
       if (hasProtocol) removeProtocol('pmtiles')
     }
-  }, [attempt, geometry, hasGeometry, onSelect, realMap, tiles])
+  }, [attempt, geometry, hasGeometry, onSelect, realMap, tiles, tileWards])
 
   useEffect(() => {
     if (!instance || instance !== map.current) return
@@ -323,6 +326,20 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
     }
     const boundary = geometry?.features.find((feature) => feature.properties.ward_id === selection.id)
     if (boundary && focus(addBounds(new LngLatBounds(), boundary.geometry))) return
+    if (tiles && config.wardFallback && isDelhiWardId(selection.id)) {
+      const controller = new AbortController()
+      void loadDelhiWardGeometry(`${config.wardFallback}/${selection.id}.json`, controller.signal).then((fallback) => {
+        if (controller.signal.aborted) return
+        const feature = fallback.features[0]
+        if (fallback.features.length !== 1 || feature.properties.ward_id !== selection.id ||
+          !focus(addBounds(new LngLatBounds(), feature.geometry))) {
+          if (!focus(featureBounds(current, selection.id))) setFocusMiss(selection.id)
+        }
+      }).catch(() => {
+        if (!controller.signal.aborted && !focus(featureBounds(current, selection.id))) setFocusMiss(selection.id)
+      })
+      return () => controller.abort()
+    }
     if (!tiles || focus(featureBounds(current, selection.id))) return
 
     const finish = () => {

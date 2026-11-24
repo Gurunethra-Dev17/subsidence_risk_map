@@ -1,157 +1,73 @@
 # Delhi subsidence inspection-prioritization prototype
 
-## Mentor review summary — page 1 of 2
+**D9 expert review draft: accepted real-data results included. External expert review and final D10/H3 acceptance are pending. Internal team use only.**
+
+## Mentor review summary - page 1 of 2
 
 ### Purpose and scope
 
-This hackathon prototype combines building-scale ground-motion and differential-settlement
-indicators into a transparent **relative inspection-prioritization** view for Delhi wards and
-250 m cells. It is not a structural inspection, a building-safety certification, a collapse
-prediction, or a causal model. The ranking is intended to help decide where a qualified engineer
-might investigate further. The project plan describes the planned method in
-[`docs/01_SOLUTION.md`](../docs/01_SOLUTION.md) and the work split and gates in
-[`docs/02_IMPLEMENTATION_AND_WORKING_PLAN.md`](../docs/02_IMPLEMENTATION_AND_WORKING_PLAN.md).
+This hackathon prototype combines building-scale ground-motion and differential-distortion indicators into a **relative ward- and 250 m cell-level inspection-prioritization** view for Delhi. It is intended to help identify areas for qualified professional review. It is not a calibrated structural-collapse probability, a causal model, a structural inspection, or a building-safety certification.
 
-**Evidence labels used below:** “planned” refers to the project method; “reference snapshot” refers
-to Person D’s separate saved code/results and is preliminary; “synthetic” refers to D8 tests/demo;
-“locally verified” refers to checked team artifacts. There is no accepted final real-data C2/C3 run
-or independent scientific validation at this stage.
+### Data, provenance and method
 
-### Data, provenance, and current status
+The selected C0 pack is delhi-candidate-0.0.1. The accepted C1@1.0 contains 1,883,862 building records, produced with engine f3af18a, a 10-year horizon, seed 42, an 80-120 m pair window, and the staged C6 parameter hash 1a30d00c183cb58b2ee4d9327d9e839a8bc3f4267a0c3b15b207c181b49ac6d5. Other source vintages are distinct: Virginia Tech Indian Megacities v2 (DOI 10.7294/25856260.v2; 2025-04-28 per project lineage), Overture Buildings release 2026-10-21.0, and a Delhi 2022 ward candidate. No single observation date is claimed for these different inputs. The verified CGWB source is the 2025 Delhi assessment table, Annexure VI, with 34 assessment units.
 
-The documented baseline source is the Virginia Tech *Data for Vertical Land Motion and Building
-Damage Risk for the Indian Megacities*, version 2, dated 2025-04-28. The solution document describes
-city vertical-land-motion files, published `Risk_*` categories, and a collapse-incident workbook.
-The source page is [Virginia Tech Dataverse](https://data.lib.vt.edu/articles/dataset/Data_for_Vertical_Land_Motion_and_Building_Damage_Risk_for_the_Indian_Megacities/25856260).
-The project plan calls for C0 building footprints and C1 building metrics; their frozen fields and
-metadata are specified in [`docs/03_CODEBASE_AND_API_CONTRACTS.md`](../docs/03_CODEBASE_AND_API_CONTRACTS.md).
-Building-footprint provenance/licensing must be carried with the pack; the solution document notes
-Overture attribution and ODbL-related terms, and says the published dataset licence still needs
-confirmation.
+The Inspection Index follows the project's frozen methodology:
 
-The team’s locally verified C1 file has null beta metrics. Person D’s separate reference snapshot
-and saved D5 report 238,115 non-null beta-horizon values among 1,883,862 records. These inputs are
-not currently reconciled; the authoritative C0/C1 version and its provenance are awaiting
-confirmation. Person D’s numeric analysis outputs must therefore be treated as preliminary and
-must not be substituted for a run on the confirmed team inputs.
+- I1: share of buildings with usable VLM data and velocity at or below -4 mm/year.
+- I2: ward 90th percentile of the C1 horizon angular-distortion metric.
+- I3: building count (exposure).
+- I4: groundwater extraction stage (%), intended to be area-weighted from assessment units to wards.
 
-The source table extracted from the 2025 Central Ground Water Board Delhi assessment contains 34
-assessment units (`out/delhi/cgwb_delhi_2025.pdf`, Annexure VI; handoff CSV under
-`out/delhi/d2_cgwb_handoff/`). Matching assessment-unit boundaries are unverified. Person D’s D2
-code uses Survey of India subdistrict boundaries as provisional proxies; its QA explicitly says
-they are not confirmed CGWB polygons. The resulting ward groundwater values are spatial estimates,
-not direct ward measurements, and are not final C2 values.
+Eligible wards are percentile-ranked per indicator using average ranks scaled to 0 to 100; larger values mean higher priority. Configured weights are 30%, 35%, 20%, and 15%. For each ward, weights are renormalized over non-null indicators. With I4 unavailable, the global effective weights are approximately 35.29%, 41.18%, 23.53%, and 0%; additional per-ward renormalization applies when another indicator is missing. Scores sort descending, with ascending ward_id as the deterministic tie-break. Rank 1 is highest priority. A ward requires at least 50% VLM coverage among assigned buildings; otherwise it is marked insufficient_data and excluded from ranking.
 
-### From InSAR metrics to ward indicators
+### Accepted results
 
-The planned C1 method derives point velocities from radar observations, pairs nearby points, and
-estimates differential distortion. The project method defines pair distortion as
-`abs(v_i − v_j) × 1e-3 / d_ij` per year, with velocities in mm/year and distance in metres;
-building-level `beta` is summarized from contributing pairs. Multiplying by the configured horizon
-produces a constant-rate scenario, not a forecast. The worked example and parameter definitions
-are in `docs/01_SOLUTION.md`, sections 7.1–7.2. The Delhi scientific context is the 2025 study
-[Building damage risk in sinking Indian megacities](https://doi.org/10.1038/s41893-025-01663-0).
+There are 250 unique wards: 245 ranked and five insufficient-data wards. Bijwasan ranks 1 with score 97.48 and D4 rank interval 1-1. Kapashera ranks 6 with score 89.44 and interval 3-13. Scores express relative priority under the selected inputs and assumptions, not risk probabilities.
 
-The plan defines I1 as the share of buildings sinking faster than 4 mm/year, I2 as the ward 90th
-percentile of horizon distortion, I3 as building exposure, and I4 as groundwater extraction stage.
-Coverage is buildings with usable data divided by buildings; below the configured 50% threshold a
-ward is `insufficient_data` and excluded from ranking. Person D’s reference aggregation consumes
-preassigned ward IDs rather than performing the planned C0 geometry-to-ward spatial join, so that
-assignment still needs upstream verification.
+The C2 cell export preserves all 23,051 supplied grid cells: 19,582 populated, 3,469 empty, 15,595 scored and 7,456 suppressed. Cells with fewer than five buildings are suppressed with restricted metrics and ranks null. Canonical cell ward_id follows the largest positive-area ward intersection, with ascending ward_id tie-breaking; it is not replaced by the majority ward among buildings. Some crossing cells consequently include buildings assigned to neighboring wards. In the spatial reconciliation, 3,728 cells intersected multiple wards; 82 had overlapping ward-intersection areas exceeding cell area. The largest-area rule reproduced the supplied grid assignment for all investigated cells, with no ties. These overlapping source polygons mean intersection area shares are not a non-overlapping partition.
 
-The reference D3 code percentile-ranks available indicators and renormalizes the 0.30/0.35/0.20/0.15
-weights over indicators available for each ward. It currently hard-codes the weights and uses
-minimum-tie ranks. Its saved revised index has 245 ranked wards but only 239 distinct ranks, so the
-ranks are not contiguous as H3 requires. This is an upstream D3 issue; D8 deliberately rejects rank
-gaps instead of silently changing them.
+D4 ran 500 Dirichlet weight perturbations (seed 42, concentration 50): mean Kendall tau was 0.9241 and median 5th-95th rank-interval width was 24. Nine A7 variants were evaluated. The three 50 m variants had no eligible ranked wards, so their correlations are unavailable. For the selected 80-120 m pair window, the 100 m and 150 m variants had tau approximately 1.000 and 0.995 on their common ranked comparison populations. This does not imply universal rank stability. The baseline C1 params hash differs from the nominal 100 m / 80-120 m A7 variant hash; similar ranks do not establish identical engine runs.
 
-## Mentor review summary — page 2 of 2
+## Mentor review summary - page 2 of 2
 
-### Groundwater, cells, uncertainty, and validation
+### Coverage, groundwater and validation limits
 
-Person D’s D2 implementation area-weights assessment-unit extraction stages over ward intersections
-and assigns the category covering the largest intersected area. The source CSV has 34 records and
-the proxy workflow reports 250 wards processed, but matching CGWB boundaries and the unit-area
-discrepancies remain unresolved. If groundwater cannot be supported, the planned index drops I4,
-renormalizes available weights, and flags the omission; it must not replace missing groundwater
-with zero.
+Of 1,883,862 C1 building records, 1,055,505 have non-null building-record VLM metrics; the separate C0 VLM point dataset contains 182,817 points. C1 angular distortion is non-null for 238,115 records and unavailable for 1,645,747. Available values are aggregated; missing values remain null, are never treated as zero, and lead to available-indicator weight renormalization. Ward beta coverage ranges from about 7.9% to 22.5% (median 14.6%), so distortion coverage remains limited and materially affects interpretation. The horizon metric is a constant-rate scenario, not a forecast.
 
-The frozen cell contract calls for I1/I2/I3 scoring within wards and suppression of cells with fewer
-than five buildings; suppressed properties must contain no restricted metrics. Person D’s current
-cell code is explicitly provisional: it omits I2, marks ambiguous ward assignments, and produces
-tabular intermediates rather than final geometry-backed C2 GeoJSON. Cell boundaries must come from
-a supplied, verified grid; the exporter will not construct them.
+CGWB table values are verified, but correspondence between CGWB assessment-unit polygons and available boundaries is not. Exploratory proxy estimates were excluded from production scoring; all 250 ward groundwater values remain null and I4 is unavailable. No proxy estimate is presented as a verified ward measurement.
 
-Person D’s saved D4 report describes 500 Dirichlet weight draws (concentration 50, seed 42) across
-245 baseline wards. Its saved mean Kendall tau is approximately 0.903 and the median p05–p95 rank
-interval width is 37 places. These are preliminary results tied to the unreconciled reference input.
-All three 50 m A7 radius variants produced zero ranked wards; 100 m variants ranked 245, while
-150 m variants ranked 250 (compared on the common 245-ward population). Sensitivity experiments
-describe model stability under selected assumptions; they are not independent observations or
-confidence intervals.
+D5 found zero accepted exact unique geometry matches between C0 buildings and published-risk records. The Spearman comparison is unavailable and the confusion matrix is empty. This is neither evidence of agreement nor disagreement; broader spatial matching was exploratory and deferred. Published risk is not independent ground truth.
 
-Person D’s D5 report contains internal checks but explicitly marks the independent published-risk
-comparison unavailable: Spearman correlation and confusion matrix are null, and its reported
-`vt_risk_insar` is null for all 1,883,862 rows in that reference report. D6 has eight source incident
-records; none has independently verified collapse-site coordinates. Six exploratory ward matches
-use approximate locality/street reference points, one record is unresolved, and the Shah Beri,
-Greater Noida record is excluded from Delhi matching. These points are not building locations.
-Person D’s D7 report compares two of four literature/locality references with Delhi wards; the
-coordinates are approximate, two references are outside Delhi, and temporary tie-broken ranks were
-used. Neither D6 nor D7 establishes building-level agreement or causation. The Delhi NCR literature
-source is [Garg et al. (2022)](https://doi.org/10.1038/s41598-021-04193-9); the project’s other
-hotspot reference is the 2025 Nature Sustainability paper cited above.
+D6 contains eight source records labelled Delhi, but no incident has independently verified site coordinates and no spatial risk or rank comparison was performed. Incident 023's source city label conflicts with its Shah Beri, Greater Noida description. Approximate locality references are not verified sites.
 
-### Export status and interpretation
+D7 compared four literature/locality references. Two approximate references were assigned to ranked wards: Bijwasan (rank 1, D4 interval 1-1) and Kapashera (rank 6, interval 3-13); both fall in the descriptive top-10% priority band. Faridabad and Ghaziabad were outside supplied ward coverage; that does not establish administrative boundaries. Coordinate derivations are undocumented, observation periods and spatial scales differ, and n=2 is not independent validation or validation accuracy.
 
-D8’s `analytics/export.py` maps explicit intermediate files to C2 ward JSON, C2 cell GeoJSON, and
-C3 validation JSON. It validates the frozen schemas, coverage flags, contiguous ward ranks, rank
-ranges, supplied EPSG:4326 cell polygons, and suppression. Synthetic tests and an ignored synthetic
-demo pass; they verify exporter behavior, not Delhi results. No final real-data C2/C3 export has been
-accepted, and H3 remains pending until authoritative inputs and upstream issues are resolved.
+### D8 status, provenance and handling
 
-The C2/C3 contract and H3 criteria are documented in `docs/03_CODEBASE_AND_API_CONTRACTS.md`,
-sections 4.4–4.5. Any C3 null or unavailable comparison must retain its explanatory note. All results
-remain descriptive associations. They do not establish that subsidence caused a collapse, identify
-an unsafe building, or predict future structural failure.
+D8 generated real C2 ward JSON, C2 cell GeoJSON, C3 validation JSON, eight figures, methodology and export metadata. Actual frozen schemas, finite-JSON, semantic and cross-reference checks passed; the full analytics suite passed 136 tests. D10 readiness returned READY, but final D10/H3 acceptance remains pending. The C2 histogram is null because no agreed binning and denominator method was available. Handoff packages were prepared for Persons B, C and E but have not been sent or integrated.
 
-### Five questions for technical review
+D1 QA was generated at 11:36:16Z, before the 11:49:40Z integration-manifest update documenting the subsequently verified VLM artifact. D1's run-time QA records that the C0 pack was then incomplete; the current manifest later verifies pack completeness. The historical manifest bytes are unavailable, so this accepted checksum exception cannot be reconstructed byte-for-byte. Current C0/C1/A7/C6 hashes and accepted D1-D8 outputs were checked. D7's canonical QA checksum excludes its outputs section (060f3d8d?); its full-file SHA-256 is d4504aaa?; these have different scopes.
 
-1. **Angular distortion:** Given that C1 summarizes nearby InSAR point-pair gradients into a
-   building-level beta percentile, what geotechnical validation would you require before using this
-   as a ward inspection-prioritization indicator, and which geometric or temporal failure modes
-   could make it misleading?
-2. **Index and missing indicators:** Is percentile ranking across currently eligible wards, followed
-   by per-ward renormalization of the 0.30/0.35/0.20/0.15 weights when I2 or I4 is missing, a
-   defensible comparison? Should wards with different available-indicator sets be ranked together,
-   or should the product show separate comparable cohorts?
-3. **Groundwater allocation:** What evidence would be sufficient to accept an area-weighted CGWB
-   assessment-unit-to-ward join, and should the current Survey of India subdistrict proxy be excluded
-   until boundaries are confirmed against CGWB units?
-4. **Uncertainty and coverage:** Are the 50% building-coverage threshold and 500 Dirichlet weight
-   draws with p05/p95 rank intervals suitable for this prototype? What additional uncertainty or
-   radius-variant checks are essential, especially where a variant yields no ranked wards?
-5. **Validation evidence:** With published categories unavailable in the current C1 and no
-   independently verified collapse-site coordinates, what independent reference data and validation
-   design would you consider credible without overstating a small-sample spatial association?
+The integration manifest retains an internal-use-only restriction while ward-source data-use terms are unresolved. Do not publish or deploy these real-data outputs until the data owner confirms permitted use. Detailed evidence is in the D1-D8 QA and provenance records under out/delhi/integration_2026-11-22/; this summary does not replace them.
 
-### Outreach email draft
+### Five questions for expert review
 
-**Subject:** Request for technical review — Delhi InSAR inspection-prioritization prototype
+1. Given that only 238,115 of 1,883,862 C1 building records have angular-distortion values, what validation would be needed before using the 10-year beta_horizon metric as an inspection-prioritization indicator, and how should its coverage limits be shown?
+2. Is average-percentile normalization with per-ward renormalization across I1-I4 defensible when wards have different missing-indicator patterns? Would you recommend reporting comparable cohorts or additional diagnostics?
+3. What boundary evidence and spatial allocation method would be adequate to assign the 34 CGWB assessment units to wards? Is excluding I4 until that correspondence is verified the appropriate treatment?
+4. Are a 50% VLM coverage threshold and the reported 500 weight perturbations and A7 radius checks informative for this prototype? How should readers interpret variants with no ranked wards and rank intervals as wide as 90 places?
+5. With no accepted D5 geometry matches, no independently located D6 collapse sites, and only two approximate D7 references comparable, what independent validation design and ground-truth evidence would be credible at this scale?
+
+### Outreach email draft - not sent
+
+**Subject:** Request for expert review - Delhi InSAR inspection-prioritization prototype
 
 Hello,
 
-We are building a hackathon-stage Delhi mapping prototype that combines building-scale InSAR
-metrics, ward coverage, groundwater context, and sensitivity analysis to help prioritize areas for
-inspection. It is an exploratory decision-support tool, not a safety certification or collapse
-prediction. We have attached a short methodology and validation summary that distinguishes implemented
-work, preliminary results, and unresolved data limitations.
+Our team has completed a hackathon-stage Delhi mapping prototype that combines building-scale InSAR metrics, ward and cell indicators, groundwater context, and sensitivity summaries to support relative inspection prioritization. We have generated real C2/C3 exports and documented the available evidence and limitations. The prototype is not a collapse-probability model or a safety certification, and independent validation remains incomplete.
 
-Would you be willing to review the methodology and advise us on the five technical questions in the
-summary, particularly the interpretation of angular distortion, groundwater spatial allocation,
-and the validation evidence needed before presenting real-data results? We would welcome a brief
-written response or a short discussion at your convenience. We can share the relevant code and
-provenance notes if useful.
+Would you be willing to review the methodology and advise us on the five questions in the accompanying summary, especially angular-distortion interpretation, missing-indicator weighting, groundwater boundary correspondence, and a credible validation design? We can share the concise summary and selected provenance material through an appropriate, rights-compliant channel. We are not seeking endorsement; critical feedback would be valuable.
 
 Thank you for considering it,
 
@@ -159,25 +75,6 @@ Subsidence Risk Map project team
 
 ---
 
-## Final-results update checklist — not part of the mentor summary
+## Pending after D9
 
-Update this package after Person A confirms the authoritative C0/C1 inputs and after a real-data D8
-run. Record the source version, C0/C1 contract metadata, hashes, engine/config versions, and actual
-null/non-null counts. Recompute and replace any affected numerical claims for:
-
-- C1 beta and VLM availability, plus D1 ward-level counts and coverage after verified spatial
-  assignment;
-- D2 groundwater values only after matching assessment-unit boundaries are confirmed (otherwise
-  retain the proxy limitation and do not present them as final);
-- D3 indicator availability, scores, ranks, tie handling, and contiguous rank acceptance;
-- D4 mean Kendall tau, rank intervals, interval-width summary, and each comparable A7 radius result;
-- D5 Spearman/confusion/per-ward comparison only if an appropriate independent published-risk
-  reference is available and joinable;
-- D6 source counts, city/date exclusions, coordinate provenance, and comparisons only where
-  independent locations support them;
-- D7 source coordinates, ward assignment, and rank/percentile values using accepted D3 ranks;
-- D8 generated C2/C3 metadata, rows/features, null explanations, figures, schema checks, and every
-  H3 criterion.
-
-Keep approximate coordinates and unavailable comparisons labeled as such. Do not replace nulls with
-fabricated zeros or change the frozen C2/C3 contracts.
+External expert feedback has not yet been obtained. Final D10/H3 acceptance, resolution of source-data-use restrictions, authoritative groundwater boundary correspondence, and independent validation remain open. Update this pack only when those items produce verified evidence; do not replace unavailable results with zeros or approximate locations.

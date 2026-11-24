@@ -42,6 +42,7 @@ def meta_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     shutil.copyfile(CONFIGS / "chennai.yaml", config_dir / "chennai.yaml")
     monkeypatch.setattr(metadata, "CONFIGS_DIR", config_dir)
     monkeypatch.setenv("API_ENV", "production")
+    monkeypatch.delenv("API_C6_CONFIG_PATH", raising=False)
     monkeypatch.delenv("AUTHORITY_TOKEN", raising=False)
 
     document = json.loads(MOCK_C2.read_text(encoding="utf-8"))
@@ -183,6 +184,46 @@ def test_default_mode_is_taken_from_c6_configuration(meta_env) -> None:
 
     assert response.status_code == 200
     assert response.json()["default_mode"] == "authority"
+
+
+def test_explicit_c6_config_path_is_used_for_meta(meta_env, monkeypatch, tmp_path) -> None:
+    client, _, _ = meta_env
+    config = yaml.safe_load((CONFIGS / "delhi.yaml").read_text(encoding="utf-8"))
+    config["mode"] = "authority"
+    selected = tmp_path / "selected-delhi.yaml"
+    selected.write_text(yaml.safe_dump(config), encoding="utf-8")
+    monkeypatch.setenv("API_C6_CONFIG_PATH", str(selected))
+
+    response = client.get(META_PATH)
+
+    assert response.status_code == 200
+    assert response.json()["default_mode"] == "authority"
+
+
+def test_explicit_c6_config_city_mismatch_fails_generically(
+    meta_env, monkeypatch, tmp_path
+) -> None:
+    client, _, _ = meta_env
+    config = yaml.safe_load((CONFIGS / "delhi.yaml").read_text(encoding="utf-8"))
+    config["city"] = "chennai"
+    selected = tmp_path / "mismatched-delhi.yaml"
+    selected.write_text(yaml.safe_dump(config), encoding="utf-8")
+    monkeypatch.setenv("API_C6_CONFIG_PATH", str(selected))
+
+    _assert_generic_internal(client.get(META_PATH))
+
+
+def test_missing_explicit_c6_path_does_not_fall_back_to_root_config(
+    meta_env, monkeypatch, tmp_path
+) -> None:
+    client, _, _ = meta_env
+    missing = tmp_path / "missing-selected-c6.yaml"
+    monkeypatch.setenv("API_C6_CONFIG_PATH", str(missing))
+
+    response = client.get(META_PATH)
+
+    _assert_generic_internal(response)
+    assert str(missing) not in response.text
 
 
 def test_invalid_yaml_and_invalid_c6_schema_fail_generically(meta_env) -> None:

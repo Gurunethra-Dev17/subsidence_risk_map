@@ -48,6 +48,7 @@ export API_WARD_SUMMARY_PATH='/mounted/artifacts/ward_summary.json'
 export API_CELL_SCORES_PATH='/mounted/artifacts/cell_scores.geojson'
 export API_VALIDATION_SUMMARY_PATH='/mounted/artifacts/validation_summary.json'
 export API_BUILDING_METRICS_PATH='/mounted/artifacts/building_metrics.parquet'
+export API_C6_CONFIG_PATH='/mounted/artifacts/delhi.yaml'
 python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 # Windows PowerShell
@@ -57,6 +58,7 @@ $env:API_WARD_SUMMARY_PATH = 'D:\artifacts\ward_summary.json'
 $env:API_CELL_SCORES_PATH = 'D:\artifacts\cell_scores.geojson'
 $env:API_VALIDATION_SUMMARY_PATH = 'D:\artifacts\validation_summary.json'
 $env:API_BUILDING_METRICS_PATH = 'D:\artifacts\building_metrics.parquet'
+$env:API_C6_CONFIG_PATH = 'D:\artifacts\delhi.yaml'
 python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
@@ -74,6 +76,7 @@ process needs directory traversal and read access to configured files.
 | `API_CELL_SCORES_PATH` | Yes in production | C2 cell-score GeoJSON FeatureCollection. |
 | `API_VALIDATION_SUMMARY_PATH` | Yes in production | C3 validation-summary JSON. |
 | `API_BUILDING_METRICS_PATH` | Yes in production | C1 building-metrics Parquet. |
+| `API_C6_CONFIG_PATH` | Required when staged C1 differs from packaged config | Explicit C6 YAML used to validate C2 metadata and compare C1 declarations. If unset, the API uses `configs/{city}.yaml`. Set this to the authoritative staged config when integrating a staged C1. |
 | `API_BUILDINGS_GEOMETRY_PATH` | Optional | C0 building-geometry Parquet. Configure this when authority building responses require C0 geometries. |
 | `API_CORS_ORIGINS` | Optional | Comma-separated allowed browser origins; unset means CORS is disabled. |
 | `API_VERSION` | Optional | API version label; defaults to `starter`. |

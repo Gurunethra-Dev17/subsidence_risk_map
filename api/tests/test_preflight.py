@@ -22,8 +22,14 @@ MOCKS = ROOT / "contracts" / "mock"
 TOKEN = "synthetic-preflight-authority-token"
 
 
-def _write_c1(path: Path, *, missing_column: str | None = None) -> None:
-    config = yaml.safe_load((ROOT / "configs" / "delhi.yaml").read_text(encoding="utf-8"))
+def _write_c1(
+    path: Path,
+    *,
+    missing_column: str | None = None,
+    config: dict | None = None,
+) -> None:
+    if config is None:
+        config = yaml.safe_load((ROOT / "configs" / "delhi.yaml").read_text(encoding="utf-8"))
     fields = [
         pa.field("bldg_id", pa.string(), nullable=False),
         pa.field("ward_id", pa.string()),
@@ -284,8 +290,61 @@ def test_c2_c6_city_mismatch_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     config = yaml.safe_load((ROOT / "configs" / "delhi.yaml").read_text(encoding="utf-8"))
     config["city"] = "chennai"
     (temporary_configs / "delhi.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-    monkeypatch.setattr(preflight, "CONFIGS_DIR", temporary_configs)
     monkeypatch.setattr(metadata, "CONFIGS_DIR", temporary_configs)
+
+    result = preflight.run_preflight(env)
+
+    assert not result.ok
+    assert "c2_ward_summary_invalid" in result.issues
+
+
+def test_explicit_c6_path_matches_c1_parameters(tmp_path: Path) -> None:
+    env = _valid_environment(tmp_path)
+    config = yaml.safe_load((ROOT / "configs" / "delhi.yaml").read_text(encoding="utf-8"))
+    config["params"]["pair_min_m"] = 80
+    config["params"]["pair_max_m"] = 120
+    c6_path = tmp_path / "selected-delhi.yaml"
+    c6_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    c1_path = tmp_path / "selected-building-metrics.parquet"
+    _write_c1(c1_path, config=config)
+    env["API_C6_CONFIG_PATH"] = str(c6_path)
+    env["API_BUILDING_METRICS_PATH"] = str(c1_path)
+
+    result = preflight.run_preflight(env)
+
+    assert result.ok
+    assert result.issues == []
+
+
+def test_explicit_c6_path_mismatch_with_c1_fails(tmp_path: Path) -> None:
+    env = _valid_environment(tmp_path)
+    config = yaml.safe_load((ROOT / "configs" / "delhi.yaml").read_text(encoding="utf-8"))
+    config["params"]["pair_min_m"] = 80
+    config["params"]["pair_max_m"] = 120
+    c6_path = tmp_path / "selected-delhi.yaml"
+    c6_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    env["API_C6_CONFIG_PATH"] = str(c6_path)
+
+    result = preflight.run_preflight(env)
+
+    assert not result.ok
+    assert "c1_parquet_metadata_invalid" in result.issues
+
+
+def test_missing_explicit_c6_path_does_not_fall_back_to_root(tmp_path: Path) -> None:
+    env = _valid_environment(tmp_path)
+    env["API_C6_CONFIG_PATH"] = str(tmp_path / "missing-selected-c6.yaml")
+
+    result = preflight.run_preflight(env)
+
+    assert not result.ok
+    assert "c2_ward_summary_invalid" in result.issues
+    assert "c1_c6_comparison_unavailable" in result.issues
+
+
+def test_explicit_mock_c6_path_is_rejected(tmp_path: Path) -> None:
+    env = _valid_environment(tmp_path)
+    env["API_C6_CONFIG_PATH"] = str(MOCKS / "config.json")
 
     result = preflight.run_preflight(env)
 

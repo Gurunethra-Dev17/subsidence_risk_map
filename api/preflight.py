@@ -20,7 +20,7 @@ import pyarrow.parquet as pq
 from jsonschema import Draft202012Validator, FormatChecker
 
 from api.integration_validation import canonical_params_hash
-from api.metadata import CONFIGS_DIR, SCHEMAS_DIR, build_meta_payload
+from api.metadata import SCHEMAS_DIR, build_meta_payload, load_city_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MOCK_ROOT = (_REPO_ROOT / "contracts" / "mock").resolve()
@@ -249,7 +249,9 @@ def run_preflight(environ: Mapping[str, str] | None = None) -> PreflightResult:
     if ward_path is not None:
         try:
             ward_summary = _read_json(ward_path)
-            build_meta_payload(ward_summary)  # C2 schema/version and selected C6.
+            build_meta_payload(
+                ward_summary, c6_config_path=env.get("API_C6_CONFIG_PATH")
+            )  # C2 schema/version and selected C6.
             c2_valid = True
         except Exception:  # noqa: BLE001 - keep parser/config details out of CLI output
             result.issues.append("c2_ward_summary_invalid")
@@ -269,17 +271,11 @@ def run_preflight(environ: Mapping[str, str] | None = None) -> PreflightResult:
     c6_config: dict[str, Any] | None = None
     if c2_valid:
         try:
-            # build_meta_payload already validates and loads precisely this city.
+            # Use the same explicitly selected C6 as the metadata endpoint.
             city = ward_summary["meta"]["city"]
-            safe_city = city if isinstance(city, str) else ""
-            config_path = (CONFIGS_DIR / f"{safe_city}.yaml").resolve(strict=True)
-            config_root = CONFIGS_DIR.resolve(strict=True)
-            if not config_path.is_relative_to(config_root):
-                raise ValueError("c6_path_invalid")
-            import yaml
-
-            with config_path.open("r", encoding="utf-8") as stream:
-                c6_config = yaml.safe_load(stream)
+            c6_config = load_city_config(
+                city, c6_config_path=env.get("API_C6_CONFIG_PATH")
+            )
         except Exception:  # noqa: BLE001 - no filesystem/config details in diagnostics
             result.issues.append("c6_city_config_invalid")
 

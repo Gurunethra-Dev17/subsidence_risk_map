@@ -231,7 +231,10 @@ async def health() -> JSONResponse:
 async def get_meta() -> JSONResponse:
     """Return validated C2 metadata with the selected C6 default mode."""
     try:
-        payload = build_meta_payload(data_store.load_ward_summary())
+        payload = build_meta_payload(
+            data_store.load_ward_summary(),
+            c6_config_path=os.getenv("API_C6_CONFIG_PATH"),
+        )
         body = MetaResponse(**payload).model_dump(mode="json")
     except Exception:  # noqa: BLE001 - C4 errors must not expose metadata validation details
         return error_response(500, "internal", "Unexpected failure")
@@ -455,7 +458,7 @@ async def get_buildings(
     ):
         raise HTTPException(status_code=500, detail="Unexpected failure")
 
-    return JSONResponse(content=result, media_type="application/geo+json")
+    return json_response(result, cache_control="no-store", media_type="application/geo+json")
 
 
 def _c4_openapi() -> dict:

@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main as api_main
-from api.data import APIData, DataPaths
+from api.data import APIData, DataPaths, json_etag
 
 TOKEN = "synthetic-e9-authority-token"
 BUILDINGS_PATH = "/api/v1/buildings"
@@ -143,6 +143,7 @@ def test_authenticated_buildings_joins_synthetic_c0_c1_and_fails_closed(
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/geo+json"
     assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["ETag"] == json_etag(response.json())
     assert counting_store.calls == 1
     feature = response.json()["features"][0]
     assert feature["properties"]["bldg_id"] == "synthetic-matched-building"

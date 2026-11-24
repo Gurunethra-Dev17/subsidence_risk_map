@@ -17,6 +17,23 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). The default public mock mode runs locally with synthetic data. The street basemap uses the network and the ward overlay can run independently. `npm run preview` serves the production build on port 4173.
 
+## Internal Delhi candidate preview
+
+Keep the geographical and analytical packages extracted outside the repository. In PowerShell, from `web/`:
+
+```powershell
+$packages = Join-Path $env:USERPROFILE 'Desktop/subsidence-data'
+$env:DELHI_GEOGRAPHY_DIR = Join-Path $packages 'delhi-c5-local-testing-candidate-0.0.3'
+$env:DELHI_ANALYTICS_DIR = Join-Path $packages 'delhi-c2-c3-person-c'
+npm.cmd run dev:delhi
+```
+
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Stop with Ctrl+C. With the same variables in a shell and the port free, run `npm.cmd run test:delhi`. Set `$env:PLAYWRIGHT_CHANNEL = 'msedge'` to use the installed Edge browser. The test suite starts and stops its own preview and saves restricted screenshots under `web/.npm-cache/delhi-test-results/`.
+
+The Vite development middleware binds to IPv4 loopback, allows same-origin read requests, and loads only named resources from the two configured directories. It checks SHA-256, C0/C2 ward and grid lineage, selected run metadata, canonical ward IDs, and cell suppression before serving. It indexes the C2 citywide cells once and returns only the selected ward. The app joins C0 boundaries to C2 ward scores by ID and displays C3 figures from the local origin. The geo-package ward and cell tile candidates are geometry only. The four tile-quantization omissions remain in the C2 source and are included in their selected-ward payloads wherever a canonical ward is assigned.
+
+The preview uses the labelled browser-print brief. Authority access and live radar require the authenticated backend. Data and figures are internal team material. Keep the preview on loopback without a tunnel. Starts with incompatible packages fail with a diagnostic and the browser exposes retry states for request failures. The normal development and production commands retain their existing mock or configured live API behavior. Production builds reject the preview mode.
+
 ## C11 local API integration
 
 With Python 3.11 available, run these commands from the frontend repository root to set up the sibling worktree.
@@ -66,14 +83,14 @@ Put these values in `web/.env.local` for local review or inject them at build ti
 | `VITE_WARDS_GEOJSON_URL` | Approved Delhi 2022 GeoJSON URL with 250 named polygons or multipolygons in longitude/latitude and unique string IDs `1` through `250`. Preferred when configured. |
 | `VITE_WARDS_TILE_URL` | Versioned C5 ward PMTiles URL with source layer `wards`. Required if GeoJSON is unset and used as fallback if the GeoJSON cannot be loaded. |
 | `VITE_CELLS_TILE_URL` | Optional C5 cell PMTiles URL with layer `cells`. Leave blank to use the selected ward’s C4 cell endpoint, including when the delivered archive contains geometry only and a scored view is needed. |
-| `VITE_POINTS_TILE_URL` | Optional approved C5 radar PMTiles URL with layer `points`. Live radar remains visible in Authority mode only. |
+| `VITE_POINTS_TILE_URL` | Optional C5 radar PMTiles URL with layer `points`. The control appears in Authority mode. Use an archive approved for URL disclosure because Vite includes this URL in the browser build. |
 | `VITE_DELHI_MAP_ATTRIBUTION` | Optional plain-text ward-source credit from the delivered manifest. The app also displays the C5 contract attribution. Use the manifest’s exact source provenance. |
 
 The API must report `city=delhi`, `n_wards=250`, and the configured vintage. Its ward list must contain all 250 canonical string IDs. A synthetic API continues to use its matching bundled ward boundaries and keeps the configured real map sources off. A loaded GeoJSON with mismatched IDs is rejected. A valid GeoJSON is coloured with the matching C4 ward metrics. Ward PMTiles use their own C5 metrics, including a score-unavailable style for unscored geometry. Cells with unknown suppression show unavailable coverage and metrics. A cell archive load failure still falls back to the selected ward’s C4 cells.
 
 Use approved, versioned asset URLs for the same release as the API and confirm the C0/C5 manifests and tile QA at handoff. The [ward lineage](../data/LINEAGE.md) records GSDL Delhi as the source named by OpenCity, Vaidyanathan R as the credited contributor, and the Kaggle mirror as the origin of the candidate bytes. Use the credit and provenance for the actual delivered release.
 
-GeoJSON must return the file directly with `GET` CORS when cross-origin. Tile hosts must support `GET`, `HEAD`, byte ranges with HTTP 206 and `Content-Range`, and CORS for the frontend origin. Use same-origin or HTTPS URLs in deployed builds. HTTP is allowed for loopback development. Add the API, archive, GeoJSON, and basemap origins to your hosting Content Security Policy as needed. Build with `npm run build` after changing environment values.
+GeoJSON must return the file directly with `GET` CORS when cross-origin. Serve the geographical package's gzip-compressed per-ward fallbacks with `Content-Type: application/geo+json` and `Content-Encoding: gzip`, even though their names end in `.json`. Tile hosts must support `GET`, `HEAD`, byte ranges with HTTP 206 and `Content-Range`, and CORS for the frontend origin. Use same-origin or HTTPS URLs in deployed builds. HTTP is allowed for loopback development. Add the API, archive, GeoJSON, and basemap origins to your hosting Content Security Policy as needed. Build with `npm run build` after changing environment values.
 
 The interface starts in light appearance with the [OpenFreeMap Bright street style](https://openfreemap.org/quick_start/). The Layers menu can follow the UI appearance or explicitly select light or dark streets. Set `VITE_BASEMAP_STYLE_URL` to replace the light style or supply both `VITE_BASEMAP_TILE_URL` and `VITE_BASEMAP_ATTRIBUTION` for a public raster basemap. Set `VITE_BASEMAP_ENABLED=false` for boundary-only rendering.
 
@@ -139,3 +156,44 @@ For [Cloudflare Pages Direct Upload](https://developers.cloudflare.com/pages/get
 Before handing off the origin, open the assigned HTTPS domain in a signed-out browser. Confirm the synthetic label, map, Methodology and Validation views, and ward print fallback. Check the response headers for the page and a hashed asset, and confirm the browser makes no localhost, C4 API, or Delhi archive requests. Share the verified origin without a trailing slash or path for the CORS allowlist.
 
 For a comparable startup measurement, serve two production builds on distinct ports and run `node scripts/measure-map.mjs URL_BEFORE URL_AFTER`. This measures five fresh Chrome contexts per build, with the basemap style request held for one second and then rejected, so it measures the ward-map fallback path independently of provider speed.
+
+### Release from a verified static artifact
+
+Public Delhi release requires explicit data-use clearance, D10/H3 acceptance, a matching final C4 API and C5 handoff, end-to-end verification, and the release owner’s approval. The Render staging API was handed off as synthetic. Keep it paired with synthetic fixtures.
+
+From `web/`, set the approved public release values listed above and run `npm.cmd run lint`, `npm.cmd run build`, and `npm.cmd run verify:assets`. For the synthetic build use `VITE_MOCK_MODE=true` and leave the Delhi settings unset. Before a real build, verify both allowed frontend origins, including `http://localhost:5173` and `https://subsidence-risk-map.vercel.app`, plus the preview origin if one is used. Request each published archive with HEAD and a byte-range GET from the frontend origin. Check CORS, exposed `Content-Range`, caching, archive layer and zoom metadata, ward and cell IDs, and suppression values against the release manifests.
+
+After release approval, use a fresh static-only folder outside the Git checkout. The PowerShell commands below mirror the earlier successful static-artifact layout and preserve the checked-in routes and headers. Run them from `web/` after the successful build and asset check.
+
+```powershell
+$stage = Join-Path ([System.IO.Path]::GetTempPath()) ('subsidence-vercel-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $stage
+Get-ChildItem -LiteralPath dist | Where-Object Name -ne '_headers' | Copy-Item -Destination $stage -Recurse
+$vercelConfig = Get-Content -LiteralPath vercel.json -Raw | ConvertFrom-Json
+$vercelConfig.framework = $null
+$vercelConfig.installCommand = ''
+$vercelConfig.buildCommand = ''
+$vercelConfig.outputDirectory = '.'
+[System.IO.File]::WriteAllText((Join-Path $stage 'vercel.json'), ($vercelConfig | ConvertTo-Json -Depth 20))
+vercel link --cwd $stage --project subsidence-risk-map --scope rosh-e561
+vercel deploy --cwd $stage --scope rosh-e561
+```
+
+Verify the preview URL before promoting the approved deployment. Signed out, check all ward IDs and source labels, representative ranks and suppression, all views, responsive widths, map interactions and API PDF bytes. Verify asset and security headers and CORS. Confirm signed-out buildings rejection, invalid-token rejection and authorized sign-out cleanup using securely supplied credentials. Then use `vercel promote <approved-preview-url> --scope rosh-e561` and repeat the checks on the stable domain. Record the previous production deployment URL beforehand. Use `vercel rollback <previous-production-deployment-url> --scope rosh-e561` if the promoted release fails. [Vercel deploy](https://vercel.com/docs/cli/deploy) · [Vercel rollback](https://vercel.com/docs/cli/rollback)
+
+To build the local baseline in a separate directory, run this from the repository root:
+
+```powershell
+$baseline = Join-Path ([System.IO.Path]::GetTempPath()) ('subsidence-839e576-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $baseline
+$archive = Join-Path $baseline 'baseline.zip'
+git archive --format=zip --output=$archive 839e576
+Expand-Archive -LiteralPath $archive -DestinationPath $baseline
+Push-Location (Join-Path $baseline 'web')
+npm.cmd ci --engine-strict
+npm.cmd run build
+npm.cmd run verify:assets
+Pop-Location
+```
+
+To restore this checkout after saving the current patch and new files, use `git restore --source=839e576 --worktree -- <reviewed modified files>` and move the new files to a backup folder. Run `git status --short --branch` to verify the result.

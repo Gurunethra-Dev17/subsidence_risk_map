@@ -103,9 +103,9 @@ export default function Dashboard() {
   const city = meta.state.status === 'ready' ? meta.state.data : undefined
   const synthetic = isSyntheticDataset(city)
   const entries = wards.state.status === 'ready' ? wards.state.data : undefined
-  const useFixtureBoundaries = config.mock || (synthetic && city?.city === 'delhi')
+  const useFixtureBoundaries = !config.internal && (config.mock || (synthetic && city?.city === 'delhi'))
   const realMetadataMatches = !synthetic && city?.city === 'delhi' && city.n_wards === delhiWardCount &&
-    Boolean(config.delhiVintage) && city.data_vintage === config.delhiVintage
+    (config.internal || (Boolean(config.delhiVintage) && city.data_vintage === config.delhiVintage))
   const realDatasetMatches = useMemo(() => realMetadataMatches && Boolean(entries && hasDelhiWardIds(entries.map((ward) => ward.ward_id))),
     [entries, realMetadataMatches])
   const useRealGeoJson = realDatasetMatches && Boolean(config.wardGeoJson)
@@ -169,7 +169,8 @@ export default function Dashboard() {
       features: compatibleGeometry.features.map((feature) => {
         const ward = byId.get(feature.properties.ward_id)
         return { ...feature, properties: {
-          ...feature.properties, status: ward?.status, score: ward?.score ?? null,
+          ...feature.properties, ward_name: ward?.ward_name ?? feature.properties.ward_name,
+          status: ward?.status, score: ward?.score ?? null, rank: ward?.rank ?? null,
         } }
       }),
     }
@@ -227,7 +228,7 @@ export default function Dashboard() {
           <div>
             <h1><Activity size={21} /> {city?.city ?? 'City'} monitoring</h1>
             <div className="source-status">{synthetic ? <FlaskConical size={14} /> : <Activity size={14} />}
-              <strong>{config.mock ? 'Synthetic data preview' : synthetic ? 'Live API · synthetic demo data' : 'Live API'}</strong>
+              <strong>{config.internal ? 'Internal Delhi candidate preview' : config.mock ? 'Synthetic data preview' : synthetic ? 'Live API · synthetic demo data' : 'Live API'}</strong>
               <span>{config.mock ? 'Fictional ward scores, boundaries and radar observations' : synthetic ? 'Fictional ward metrics and boundaries' : city?.data_vintage}</span>
               {!config.mock && <span role="status">{health.state.status === 'ready' ? `API reachable · ${health.state.data.version}`
                 : health.state.status === 'error' ? 'API health check failed' : 'Checking API health…'}</span>}
@@ -269,7 +270,9 @@ export default function Dashboard() {
             </div>
             <MapLegend />
             <p className="map-caption">City-relative inspection priority <a className="text-button" href={viewHref('methods')}>How to read the index</a></p>
-            {renderRealMap && <p className="map-caption">{c5Attribution}{config.delhiAttribution && ` · ${config.delhiAttribution}`}</p>}
+            {renderRealMap && <p className="map-caption">{c5Attribution}
+              {config.internal && ' · Delhi ward source: Geospatial Delhi Limited (GSDL Delhi). OpenCity credit: Vaidyanathan R. Candidate bytes from the Kaggle mirror.'}
+              {config.delhiAttribution && ` · ${config.delhiAttribution}`}</p>}
           </section>
 
           <aside className="sidebar" aria-label="Ward analysis">
@@ -305,7 +308,7 @@ export default function Dashboard() {
           <header className="detail-heading">
             <div>
               <h1>{page === 'inspector' ? 'Ward Inspector' : 'Inspection Brief'}</h1>
-              <p className="source-status"><strong>{synthetic ? 'Synthetic data preview' : 'Public ward summary'}</strong>{city?.data_vintage && <span>{city.data_vintage}</span>}</p>
+              <p className="source-status"><strong>{config.internal ? 'Internal Delhi candidate preview' : synthetic ? 'Synthetic data preview' : 'Public ward summary'}</strong>{city?.data_vintage && <span>{city.data_vintage}</span>}</p>
             </div>
             <div className="view-actions">
               <a className="secondary-button" href={viewHref('map')}>Back to Overview Map</a>
@@ -330,7 +333,7 @@ export default function Dashboard() {
             : details.state.status === 'error' ? <FailedState label="Ward details" error={details.state.error} retry={details.retry} />
               : !selectedDetails ? <p className="panel-state" role="status">Loading ward details…</p>
                 : <Suspense fallback={<p className="panel-state" role="status">{page === 'inspector' ? 'Loading ward inspector…' : 'Loading inspection brief…'}</p>}>
-                  {page === 'inspector' ? <WardInspector ward={selectedDetails} rankedCount={city?.n_ranked} feature={inspectorFeature} />
+                  {page === 'inspector' ? <WardInspector ward={selectedDetails} meta={city} feature={inspectorFeature} />
                     : <InspectionBrief key={selectedId} ward={selectedDetails} meta={city} />}
                 </Suspense>}
         </div>}

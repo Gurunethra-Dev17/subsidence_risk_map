@@ -6,7 +6,7 @@ type Api = components['schemas']
 export type Ward = Api['Ward']
 export type WardQuery = NonNullable<operations['listWards']['parameters']['query']>
 export type WardGeometry = FeatureCollection<Polygon | MultiPolygon,
-  Pick<Ward, 'ward_id' | 'ward_name'> & Partial<Pick<Ward, 'status' | 'score'>>>
+  Pick<Ward, 'ward_id' | 'ward_name'> & Partial<Pick<Ward, 'status' | 'score' | 'rank'>>>
 export type RadarGeometry = FeatureCollection<Point, { pt_id: string; vlm_mm_yr: number }>
 
 export interface DataService {
@@ -65,6 +65,7 @@ async function json<T>(path: string, signal?: AbortSignal, accept = 'application
 
 const wardPath = (wardId: string) => `/wards/${encodeURIComponent(wardId)}`
 const wardCache = new Map<string, { ward: Ward; expires: number }>()
+const previewCells = new Map<string, Api['CellFeatureCollection']>()
 
 const liveService: DataService = {
   getMeta: (signal) => json('/meta', signal),
@@ -87,7 +88,21 @@ const liveService: DataService = {
     wardCache.set(wardId, { ward, expires: Date.now() + 60_000 })
     return ward
   },
-  getWardCells: (wardId, signal) => json(`${wardPath(wardId)}/cells`, signal, 'application/geo+json, application/json'),
+  async getWardCells(wardId, signal) {
+    signal?.throwIfAborted()
+    const cached = previewCells.get(wardId)
+    if (cached) return cached
+    const cells = await json<Api['CellFeatureCollection']>(`${wardPath(wardId)}/cells`, signal, 'application/geo+json, application/json')
+    if (config.internal) {
+      signal?.throwIfAborted()
+      if (previewCells.size >= 12) {
+        const oldest = previewCells.keys().next().value
+        if (oldest !== undefined) previewCells.delete(oldest)
+      }
+      previewCells.set(wardId, cells)
+    }
+    return cells
+  },
   async getWardBrief(wardId, signal) {
     const response = await request(`${wardPath(wardId)}/brief.pdf`, 'application/pdf', signal)
     if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/pdf')) {

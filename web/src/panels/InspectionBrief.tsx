@@ -15,7 +15,7 @@ export default function InspectionBrief({ ward, meta }: {
   ward: Ward
   meta?: Api['MetaResponse']
 }) {
-  const [pdf, setPdf] = useState<Pdf>({ status: config.mock ? 'fallback' : 'loading' })
+  const [pdf, setPdf] = useState<Pdf>({ status: config.mock || config.internal ? 'fallback' : 'loading' })
   const [cells, setCells] = useState<Api['CellProperties'][] | 'unavailable' | null>(null)
   const range = rankRange(ward)
   const priority = scoreBand(ward.status, ward.score)
@@ -26,10 +26,10 @@ export default function InspectionBrief({ ward, meta }: {
     void getDataService().then(async (service) => {
       const cellsRequest = service.getWardCells(ward.ward_id, controller.signal).then((collection) => {
         if (!controller.signal.aborted) setCells(collection.features.map((feature) => feature.properties)
-          .filter((cell) => cell.suppressed === false && cell.cell_rank_in_ward != null)
+          .filter((cell) => cell.suppressed === false && cell.cell_rank_in_ward != null && cell.cell_score != null)
           .sort((a, b) => (a.cell_rank_in_ward ?? 0) - (b.cell_rank_in_ward ?? 0)))
       }).catch(() => { if (!controller.signal.aborted) setCells('unavailable') })
-      if (config.mock) { await cellsRequest; return }
+      if (config.mock || config.internal) { await cellsRequest; return }
       try {
         const blob = await service.getWardBrief(ward.ward_id, controller.signal)
         if (controller.signal.aborted) return
@@ -67,7 +67,7 @@ export default function InspectionBrief({ ward, meta }: {
         <header>
           <span className="brief-kicker">Subsidence Risk Map · Ward screening</span>
           <h2>{ward.ward_name}</h2>
-          <p>{ward.ward_id} · {meta?.city ?? 'City unavailable'} · {isSyntheticDataset(meta) ? 'Synthetic demonstration' : 'Public ward summary'}</p>
+          <p>{ward.ward_id} · {meta?.city ?? 'City unavailable'} · {config.internal ? 'Internal Delhi candidate preview' : isSyntheticDataset(meta) ? 'Synthetic demonstration' : 'Public ward summary'}</p>
         </header>
         <dl className="brief-metrics">
           <div><dt>Priority band</dt><dd>{priority.label}</dd></div>
@@ -95,6 +95,7 @@ export default function InspectionBrief({ ward, meta }: {
           <strong>Inspection use</strong>
           <p>This brief ranks areas for inspection. It does not certify any building. Projections are scenarios under constant rates.</p>
           <p>Data vintage {meta?.data_vintage ?? 'unavailable'} · Engine {meta?.engine_version ?? 'unavailable'} · C2 {meta?.contract_versions.C2 ?? 'unavailable'}</p>
+          {typeof meta?.params.horizon_years === 'number' && <p>Distortion scenario {meta.params.horizon_years} years at constant rates. Rank ranges describe sensitivity to indicator weights.</p>}
         </footer>
       </article>
     </section>

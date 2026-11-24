@@ -5,6 +5,7 @@ import { defineConfig, loadEnv } from 'vite'
 import type { Plugin } from 'vite'
 import type { components } from './types/openapi'
 import { publicHttpUrl } from './src/api/publicUrl'
+import { delhiPreview } from './scripts/delhi-preview'
 
 function publicFixtures(): Plugin {
   const id = 'virtual:public-fixtures'
@@ -57,7 +58,9 @@ function publicFixtures(): Plugin {
   }
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode, isPreview }) => {
+  const internal = mode === 'delhi-preview'
+  if (internal && (command !== 'serve' || isPreview)) throw new Error('Delhi preview is available only through the Vite development server.')
   const env = loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)))
   if (Object.keys(env).some((key) => /(?:TOKEN|SECRET|PASSWORD)/i.test(key))) {
     throw new Error('Keep credentials out of all VITE_* configuration.')
@@ -71,7 +74,7 @@ export default defineConfig(({ mode }) => {
     catch { throw new Error(`${key} must be a relative, HTTPS or loopback URL without credentials.`) }
   }
   return {
-  plugins: [react(), publicFixtures()],
+  plugins: [react(), publicFixtures(), ...(internal ? [delhiPreview()] : [])],
   worker: { format: 'es' },
   build: {
     rollupOptions: {
@@ -83,6 +86,7 @@ export default defineConfig(({ mode }) => {
     },
   },
   server: {
+    ...(internal ? { host: '127.0.0.1', cors: false } : {}),
     // The browser can only access web/. The plugin reads the selected fixtures in Node.
     fs: { allow: [fileURLToPath(new URL('.', import.meta.url))] },
     watch: { ignored: ['**/.npm-cache/**'] },

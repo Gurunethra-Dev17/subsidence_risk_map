@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests',
-  testIgnore: '**/live-api.spec.ts',
+  testIgnore: ['**/live-api.spec.ts', '**/delhi-preview.spec.ts'],
   outputDir: '.npm-cache/test-results',
   workers: 1,
   timeout: 45_000,

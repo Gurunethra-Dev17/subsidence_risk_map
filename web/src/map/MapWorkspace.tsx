@@ -213,12 +213,16 @@ export default function MapWorkspace({ geometry, wardTiles, realMap, selection, 
           current.getCanvas().style.cursor = feature || ward ? 'pointer' : ''
           const { x, y } = lastPointer.point
           if (feature) {
-            setHover({ x, y, label: feature.id, detail: feature.fields[0].value, layer: feature.layer })
+            const score = feature.fields.find((field) => field.label === 'Index')
+            const rank = feature.fields.find((field) => field.label === 'Rank in ward')
+            const detail = score && rank ? `${score.value} · Rank ${rank.value}` : feature.fields[0].value
+            setHover({ x, y, label: feature.id, detail, layer: feature.layer })
           } else if (typeof ward?.ward_name === 'string' && (!realMap || isDelhiWardId(ward.ward_id))) {
             const band = scoreBand(ward.status, ward.score)
             setHover({ x, y, label: ward.ward_name,
               detail: band.label + (typeof ward.score === 'number' && band.id !== 'insufficient' && band.id !== 'unavailable'
-                ? ' · ' + showNumber(ward.score) + '/100' : '') })
+                ? ' · ' + showNumber(ward.score) + '/100' +
+                  (typeof ward.rank === 'number' && ward.rank > 0 ? ' · Rank #' + showNumber(ward.rank) : '') : '') })
           } else setHover(null)
         })
       })

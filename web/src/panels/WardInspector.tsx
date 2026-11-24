@@ -4,6 +4,8 @@ import type { Ward } from '../api/service'
 import { overlaySettings } from '../map/overlayLayers'
 import type { MapFeature } from '../map/overlayLayers'
 import { flagLabels, formatNumber, rankRange, scoreBand, showNumber } from '../wardMetrics'
+import { config } from '../config'
+import type { components } from '../../types/openapi'
 
 const DistortionHistogram = lazy(() => import('./DistortionHistogram'))
 
@@ -22,7 +24,7 @@ function Indicators({ ward }: { ward: Ward }) {
   const beta = ward.beta_p90_horizon
   const values = [
     { label: 'Share sinking ≥4 mm/yr', value: share == null ? null : `${formatNumber(share * 100)}%`, help: 'Share of buildings with radar-derived motion sinking at least 4 mm per year. This is indicator I1.' },
-    { label: '90th percentile distortion', value: ratio ?? (beta == null ? null : beta.toPrecision(4)), help: 'The upper-end ward value for projected cumulative angular distortion under constant ground-motion rates. The displayed ratio is dimensionless. This is indicator I2.' },
+    { label: '90th percentile distortion', value: ratio ?? (beta == null ? null : beta.toPrecision(4)), help: 'The upper-end ward value for cumulative angular distortion under constant ground-motion rates. The value is dimensionless. When the export has no ratio string, the source decimal is shown.' },
     { label: 'Building exposure', value: formatNumber(ward.n_buildings), help: 'Total building count in the ward. This is the exposure indicator I3.' },
     { label: 'Groundwater extraction', value: ward.gw_stage_pct == null ? null : `${formatNumber(ward.gw_stage_pct)}%`, help: 'Area-weighted stage of groundwater extraction. If unavailable, the index redistributes the groundwater weight. This is indicator I4.' },
     { label: 'Median vertical motion', value: ward.vlm_median_mm_yr == null ? null : `${formatNumber(ward.vlm_median_mm_yr)} mm/yr`, help: 'Median vertical land motion from building summaries. Negative values indicate sinking.' },
@@ -38,6 +40,7 @@ function Indicators({ ward }: { ward: Ward }) {
         ))}
         {ward.gw_category && <div><dt>Groundwater category</dt><dd className="capitalize">{ward.gw_category}</dd></div>}
       </dl>
+      {config.internal && ward.gw_stage_pct == null && <p className="muted-copy">Groundwater assessment-unit boundaries could not be reliably matched to wards.</p>}
     </section>
   )
 }
@@ -94,14 +97,15 @@ function WardAnalytics({ ward, rankedCount }: { ward: Ward; rankedCount?: number
         <Suspense fallback={<p className="muted-copy" role="status">Loading distribution…</p>}>
           <DistortionHistogram histogram={ward.histogram} />
         </Suspense>
+        {config.internal && ward.histogram == null && <p className="muted-copy">The C2 export has no agreed histogram bins or denominator.</p>}
       </section>
     </>
   )
 }
 
-export default function WardInspector({ ward, rankedCount, feature }: {
+export default function WardInspector({ ward, meta, feature }: {
   ward: Ward
-  rankedCount?: number
+  meta?: components['schemas']['MetaResponse']
   feature: MapFeature | null
 }) {
   return (
@@ -110,7 +114,7 @@ export default function WardInspector({ ward, rankedCount, feature }: {
         <span className="section-icon"><ScanLine size={18} /></span>
         <div><h2 id="inspector-title">{ward.ward_name}</h2><p className="muted-copy">{ward.ward_id}</p></div>
       </div>
-      <WardAnalytics ward={ward} rankedCount={rankedCount} />
+      <WardAnalytics ward={ward} rankedCount={meta?.n_ranked} />
       <section className="inspector-section" aria-labelledby="feature-heading">
         <h3 id="feature-heading">Map feature evidence</h3>
         {feature ? <>
@@ -121,6 +125,7 @@ export default function WardInspector({ ward, rankedCount, feature }: {
       <section className="inspector-section" aria-labelledby="inspector-limitations">
         <h3 id="inspector-limitations">Scientific limitations</h3>
         <p className="muted-copy">The index prioritises field inspections. Building safety requires separate evidence. Distortion estimates assume constant ground-motion rates over the scenario horizon.</p>
+        {meta && <p className="muted-copy">Data vintage {meta.data_vintage} · Engine {meta.engine_version} · C2 {meta.contract_versions.C2} · Exported {meta.generated_utc}</p>}
       </section>
     </section>
   )

@@ -205,9 +205,7 @@ python -m analytics.integration_check run `
   --generated-utc 2026-11-24T12:00:00Z
 ```
 
-These are command templates for corrected D intermediates. They are not evidence that current D
-files pass. The current readiness check is expected to fail until upstream gaps below are resolved.
-All real inputs and outputs remain under ignored `out/`; do not commit or publish restricted data.
+These commands were D8-phase templates for corrected intermediates. Their former expected-failure note is historical and is superseded by the final D10 acceptance addendum below. All real inputs and outputs remain under ignored `out/`; do not commit or publish restricted data.
 
 ## Current Person D intermediate compatibility
 
@@ -250,5 +248,82 @@ not prove their source hash. Do not treat numerical similarity as provenance.
 9. Supply versioned intermediate CSV/JSON files, a complete D8 metadata JSON, optional full C3
    validation sections, and the exact D6 fragment. Include source hashes in metadata when known.
 10. Run the `check` command, resolve all fatal errors, then run the versioned `run` command. Attach
-    the readiness and provenance reports plus tests/schema results. D10/H3 acceptance remains a
-    separate review after real outputs exist.
+    the readiness and provenance reports plus tests/schema results. The final real-data H3 review is recorded in the D10 addendum below.
+
+
+---
+
+# D10 final internal integration handoff
+
+Generated: 2026-11-24T16:30:42Z
+Accepted baseline: `help/d6-collapse-validation` at `03cdd1cf55f6db90d5ec5b9ad840dc7a94b4ea21`.
+
+## Status
+
+D10 readiness returned **READY** on accepted real D3/D4/C0/C1/C6 inputs. C0 quality passed; C2 ward, C2 cell and C3 outputs pass frozen schemas and H3 technical checks. This is internal technical handoff readiness, not evidence of consumer integration, independent scientific validation or public deployment authorization. Detailed matrix: `h3_acceptance_report.md`; machine-readable evidence: `d10_qa.json`.
+
+## Authoritative inputs and outputs
+
+- **C0 directory:** `out/delhi/`; manifest `out/delhi/PACK_MANIFEST.json`; six files: buildings.parquet, collapse_incidents.csv, grid_250m.geojson, vlm_points.parquet, vt_building_risk.parquet, wards.geojson. Quality validation passed with expected rows: buildings 1,883,862; incidents 8; grid 23,051; VLM points 182,817; risk 3,517,198; wards 250.
+- **C1:** `out/delhi/integration_2026-11-22/C1/building_metrics.parquet`; run summary `out/delhi/integration_2026-11-22/C1/building_metrics.run_summary.json`. C1@1.0, engine f3af18a, 10-year horizon, seed 42, pair window 80-120 m, params hash `1a30d00c183cb58b2ee4d9327d9e839a8bc3f4267a0c3b15b207c181b49ac6d5`; 1,883,862 unique IDs, 1,055,505 non-null VLM, 238,115 non-null beta. C0-only/C1-only IDs and assignment mismatches: zero.
+- **C6:** `out/delhi/integration_2026-11-22/reference/configs/delhi.yaml`; this staged reference is the selected config, not root `configs/delhi.yaml`. Full params hash agrees with C1 metadata.
+- **A7:** nine Parquets under `out/delhi/integration_2026-11-22/A7/robustness/`; hashes/metadata agree with `analytics/d4/robustness_summary.json`. Baseline C1 params hash differs from nominal 100m/80-120m A7 params hash. Similar ranking does not mean identical run.
+- **D1-D7 accepted outputs:** `out/delhi/integration_2026-11-22/analytics/d1/` through `d7/`; D6 output also at `out/delhi/collapse_check.json` and QA at `out/delhi/collapse_qa.json`.
+- **D8 accepted outputs:** `out/delhi/integration_2026-11-22/analytics/d8/ward_summary.json`, `cell_scores.geojson`, `validation_summary.json`; methodology, metadata, QA and figures are in the same directory.
+- **D10:** `out/delhi/integration_2026-11-22/analytics/d10/`.
+
+## Reproducible real-data readiness command
+
+Run from repository root in PowerShell:
+
+```powershell
+python -m pipeline.quality out/delhi --expected-wards 250
+$root = 'out/delhi/integration_2026-11-22'
+python -m analytics.integration_check check `
+  --wards-csv "$root/analytics/d3/ward_index.csv" `
+  --sensitivity-csv "$root/analytics/d4/ward_sensitivity.csv" `
+  --meta-json "$root/analytics/d8/inputs/meta.json" `
+  --cells-csv "$root/analytics/d3/cell_scores.csv" `
+  --geometry-geojson 'out/delhi/grid_250m.geojson' `
+  --ward-geometry-geojson 'out/delhi/wards.geojson' `
+  --integration-manifest "$root/integration_manifest.json" `
+  --validation-json "$root/analytics/d8/inputs/validation.json" `
+  --report-json "$root/analytics/d10/d10_qa.json" `
+  --overwrite-report
+```
+
+The validation JSON already includes D4/D5/D6/D7 and fresh-data sections; do not pass the D6 fragment again. `check` writes only the explicit ignored report path and does not regenerate D8 or rerun D1-D7.
+
+## H3 summary
+
+- **C2 ward:** 250 unique ward IDs match C0; 245 ranked, five insufficient-data; ranks 1-245 contiguous; scores/ranks match D3; all D4 intervals match and bracket baseline; 50% coverage rule applied. Groundwater null. Histogram null is allowed because no binning/denominator was agreed.
+- **C2 cells:** 23,051 unique grid IDs and geometries match C0; 19,582 populated; 3,469 empty; 15,595 scored; 7,456 suppressed. All suppressed metrics/ranks null; within-ward ranks contiguous. Canonical cell ward follows largest positive-area intersection. Cross-boundary cells may contain neighboring-ward buildings; ward polygons overlap.
+- **C3:** accepted D4 results; D5 zero accepted exact matches with rho null and empty confusion matrix; D6 eight source-city labels but no independently verified coordinates; D7 four records with two approximate comparable ranks; fresh-data status `not_run`, no HyP3 job or displacement product.
+
+## Consumer responsibilities
+
+### Person B
+Use the real ward summary and cell GeoJSON above. Preserve ward/cell IDs, geometry, suppression, null metrics and ranks. Private package `analytics/d8/handoff/delhi-c2-person-b.zip` is unchanged and retains its D8 checkpoint warning. Tile generation/H4 acceptance is separate and not verified.
+
+### Person C
+Use C2 ward/cell and C3 validation outputs. Preserve null groundwater/histogram and render unavailable evidence as unavailable, not zero. Private package `analytics/d8/handoff/delhi-c2-c3-person-c.zip` is unchanged with its original D8 warning. Receipt and frontend integration are unverified; internal use only.
+
+### Person E
+Use C0 `out/delhi/`, latest C1 above, C2 ward `.../analytics/d8/ward_summary.json`, C2 cell `.../analytics/d8/cell_scores.geojson`, C3 `.../analytics/d8/validation_summary.json`, and selected C6 config above. Verify file hashes against D8 `SHA256SUMS.txt`/D10 QA before configuration. The D branch worktree does not check out the FastAPI implementation. A read-only inspection of local `e/api-insar` at `e47993d35c37e49db69fc00f7142c9ec73db44ed` confirms `Settings` is defined in `api/main.py` (there is no `api/config.py` or `api/settings.py`) and artifact paths are defined in `api/data.py`. Production requires explicit `API_ENV=production`, nonempty `AUTHORITY_TOKEN`, and `API_WARD_SUMMARY_PATH`, `API_CELL_SCORES_PATH`, `API_VALIDATION_SUMMARY_PATH`, and `API_BUILDING_METRICS_PATH`. No `API_BUILDINGS_PATH` variable is declared; buildings reads use the metrics path and optional geometry path. `API_BUILDINGS_GEOMETRY_PATH` is optional in configuration but should point to C0 `out/delhi/buildings.parquet` for real bbox/building geometry responses; `API_CORS_ORIGINS` is optional and should contain the exact frontend origin; `API_VERSION` is optional and defaults to `starter`. The default environment is production; mock/demo-token fallback requires explicit `API_ENV=dev`, and configured `AUTHORITY_TOKEN` takes precedence. Person E should verify this mapping on the E branch before E9. No E9 code integration was performed.
+
+## Provenance and restrictions
+
+All 19 D8 checksum entries, three package hashes, ZIP CRCs and package member checksums passed; packaged C2/C3 primary files match accepted D8 outputs. All 46 recorded provenance source hashes passed. Historical D1 QA references the prior manifest SHA `e1a77f318ebe51946710f231cae8633613586d9b2ef4b7b862d88c1747b131fb`; the current manifest is `a3e2a6c4c0e2e10d41ff32859a7ba0d49880481c7e25c88a3d41e19eff5e2cd0`. D1 predates the update; historical bytes are unavailable. This is the sole accepted historical exception. D7 canonical digest excludes `outputs` (`060f3d8d7f8669ed3155ddcb3e7cf54ea90151cc54b45fd6ea905248cba33f74`); full-file SHA is `d4504aaae21eced0c65af17cd168c966987953a2ef535f361be98e54b71f1ba6`.
+
+Limitations: sparse angular-distortion coverage; unverified CGWB boundaries and excluded I4; null histogram; 740,639 unassigned C0 buildings; cell boundary and overlapping ward geometry behavior; D4 uncertainty and unavailable 50m comparisons; D5 matching unavailable; D6 no verified incident locations (023 conflicts with Shah Beri/Greater Noida); D7 approximate references/small sample; no new Sentinel-1/HyP3 product. This is a relative inspection-prioritization index, not a collapse probability or safety certification. Independent validation and expert review are pending.
+
+**Internal use only:** ward-source rights remain unresolved. Do not publish, deploy publicly or distribute outside the team. D8 packages remain byte-identical checkpoint artifacts with their original pending-D10 warning. This separate D10 report does not send or upload them.
+
+## Decisions
+
+- H3 technical acceptance: **PASS WITH DOCUMENTED LIMITATIONS**.
+- D10 task: **COMPLETE WITH DOCUMENTED LIMITATIONS**.
+- Internal handoff: **READY** for consumer integration; receipt/integration by B/C/E unverified.
+- E9 technical start: **READY for internal E-branch integration**, subject to Person E configuration confirmation and existing data restrictions; E9 itself was not performed.
+- Independent scientific validation: **NOT COMPLETE**; external expert review: **PENDING**.
+- Public deployment: **NOT AUTHORIZED**.

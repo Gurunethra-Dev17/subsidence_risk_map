@@ -56,6 +56,28 @@ def _cell(cell_id: str, rank: int | None, **properties):
     return {"type": "Feature", "geometry": None, "properties": cell_properties}
 
 
+def _polygon(x: float, y: float, size: float = 0.001):
+    return {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [x, y],
+                [x + size, y],
+                [x + size, y + size],
+                [x, y + size],
+                [x, y],
+            ]
+        ],
+    }
+
+
+def _geo_cell(cell_id: str, geometry, **properties):
+    feature = _cell(cell_id, 1)
+    feature["geometry"] = geometry
+    feature["properties"].update(properties)
+    return feature
+
+
 @pytest.fixture
 def brief_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     summary_path = tmp_path / "ward_summary.json"
@@ -122,6 +144,180 @@ def test_known_ward_returns_single_page_pdf_with_required_content_and_headers(
         "projections are scenarios under constant rates"
     ) in text
     assert set(tmp_path.iterdir()) == before
+
+
+def test_vector_map_renders_polygon_and_multipolygon_with_score_and_suppression_legend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    cells_path = tmp_path / "cells.geojson"
+    multipolygon = {
+        "type": "MultiPolygon",
+        "coordinates": [
+            _polygon(77.10, 28.55)["coordinates"],
+            _polygon(77.103, 28.55)["coordinates"],
+        ],
+    }
+    cells = [
+        _geo_cell("scored-polygon", _polygon(77.10, 28.55), cell_score=75),
+        _geo_cell("scored-multipolygon", multipolygon, cell_score=40),
+        _geo_cell(
+            "suppressed-cell",
+            _polygon(77.106, 28.55),
+            suppressed=True,
+            cell_score=987654,
+            beta_p90_horizon=876543,
+        ),
+    ]
+    summary_path.write_text(
+        json.dumps({"contract": "C2@1.0", "meta": {}, "wards": [_ward()]}),
+        encoding="utf-8",
+    )
+    cells_path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": cells}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        api_main,
+        "data_store",
+        APIData(DataPaths(
+            ward_summary=summary_path,
+            cell_scores=cells_path,
+            building_metrics=tmp_path / "unused.parquet",
+            validation_summary=tmp_path / "unused-validation.json",
+            buildings_geometry=None,
+        )),
+    )
+
+    response = TestClient(api_main.app).get("/api/v1/wards/ward-test-01/brief.pdf")
+    reader = PdfReader(BytesIO(response.content))
+    text = re.sub(r"\s+", " ", reader.pages[0].extract_text() or "")
+    vector_content = reader.pages[0].get_contents().get_data()
+
+    assert response.status_code == 200
+    assert len(reader.pages) == 1
+    assert "Ward-assigned grid-cell overview" in text
+    assert "not an administrative boundary" in text
+    assert "Lower to higher relative inspection priority" in text
+    assert "Suppressed: no score displayed" in text
+    assert "not collapse probability" in text
+    assert b" m" in vector_content and b" l" in vector_content and b"h" in vector_content
+    assert b"987654" not in vector_content and b"876543" not in vector_content
+    assert "987654" not in text and "876543" not in text
+
+
+def test_suppressed_score_is_never_read_for_map_rendering() -> None:
+    from api.brief import _CellMap
+
+    class SuppressedProperties(dict):
+        def get(self, key, default=None):
+            if key == "cell_score":
+                raise AssertionError("suppressed score must not be read")
+            return super().get(key, default)
+
+    cells = {
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": _polygon(77.1, 28.5),
+                "properties": SuppressedProperties({"suppressed": True}),
+            }
+        ]
+    }
+    assert _CellMap(cells)._cells[0][1:] == (True, None)
+
+
+def test_invalid_or_missing_cell_geometry_displays_map_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    cells_path = tmp_path / "cells.geojson"
+    invalid = {
+        "type": "Polygon",
+        "coordinates": [[[0, 0], [1, 1], [0, 1], [1, 0], [0, 0]]],
+    }
+    cells_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    _geo_cell("empty", {"type": "Polygon", "coordinates": []}),
+                    _geo_cell("self-crossing", invalid),
+                    _cell("missing", 1),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        json.dumps({"contract": "C2@1.0", "meta": {}, "wards": [_ward()]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        api_main,
+        "data_store",
+        APIData(DataPaths(
+            ward_summary=summary_path,
+            cell_scores=cells_path,
+            building_metrics=tmp_path / "unused.parquet",
+            validation_summary=tmp_path / "unused-validation.json",
+            buildings_geometry=None,
+        )),
+    )
+
+    response = TestClient(api_main.app).get("/api/v1/wards/ward-test-01/brief.pdf")
+    reader = PdfReader(BytesIO(response.content))
+    text = re.sub(r"\s+", " ", reader.pages[0].extract_text() or "")
+    assert response.status_code == 200
+    assert "Map unavailable: no usable cell geometry" in text
+
+
+def test_insufficient_coverage_keeps_map_and_score_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    cells_path = tmp_path / "cells.geojson"
+    ward = _ward(
+        status="insufficient_data",
+        rank=None,
+        score=None,
+        rank_p05=None,
+        rank_p95=None,
+        n_buildings_with_data=0,
+        coverage_pct=0,
+    )
+    cells_path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [_geo_cell("unscored-cell", _polygon(77.1, 28.5), cell_score=None)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        json.dumps({"contract": "C2@1.0", "meta": {}, "wards": [ward]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        api_main,
+        "data_store",
+        APIData(DataPaths(
+            ward_summary=summary_path,
+            cell_scores=cells_path,
+            building_metrics=tmp_path / "unused.parquet",
+            validation_summary=tmp_path / "unused-validation.json",
+            buildings_geometry=None,
+        )),
+    )
+
+    response = TestClient(api_main.app).get("/api/v1/wards/ward-test-01/brief.pdf")
+    reader = PdfReader(BytesIO(response.content))
+    text = re.sub(r"\s+", " ", reader.pages[0].extract_text() or "")
+    assert response.status_code == 200
+    assert "Inspection Index Unavailable" in text
+    assert "This ward is marked insufficient_data and is not ranked" in text
+    assert "Insufficient evidence is not evidence of low risk" in text
+    assert "Map unavailable" not in text
 
 
 def test_unknown_ward_uses_c4_error_envelope(brief_client: TestClient) -> None:

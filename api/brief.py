@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from io import BytesIO
 from typing import Any
 from xml.sax.saxutils import escape
@@ -12,6 +13,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
+    Flowable,
     KeepTogether,
     Paragraph,
     SimpleDocTemplate,
@@ -30,6 +32,226 @@ _INK = colors.HexColor("#17324D")
 _MUTED = colors.HexColor("#526477")
 _PALE = colors.HexColor("#EEF4F8")
 _RULE = colors.HexColor("#D5E0E8")
+_SCORE_LOW = (0.91, 0.95, 0.98)
+_SCORE_HIGH = (0.08, 0.30, 0.47)
+_SUPPRESSED = colors.HexColor("#E1E5E8")
+
+
+def _segments_intersect(a, b, c, d) -> bool:
+    """Return whether two non-adjacent planar ring segments cross."""
+
+    def orientation(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    return (
+        orientation(a, b, c) * orientation(a, b, d) < 0
+        and orientation(c, d, a) * orientation(c, d, b) < 0
+    )
+
+
+def _valid_ring(raw_ring: Any) -> list[tuple[float, float]] | None:
+    """Accept a finite, closed, non-degenerate, non-self-crossing GeoJSON ring."""
+    if not isinstance(raw_ring, list) or len(raw_ring) < 4:
+        return None
+    points: list[tuple[float, float]] = []
+    for position in raw_ring:
+        if not isinstance(position, (list, tuple)) or len(position) < 2:
+            return None
+        lon, lat = position[0], position[1]
+        if (
+            isinstance(lon, bool)
+            or isinstance(lat, bool)
+            or not isinstance(lon, (int, float))
+            or not isinstance(lat, (int, float))
+            or not math.isfinite(lon)
+            or not math.isfinite(lat)
+            or not -180 <= lon <= 180
+            or not -90 <= lat <= 90
+        ):
+            return None
+        points.append((float(lon), float(lat)))
+    if points[0] != points[-1] or len(set(points[:-1])) != len(points) - 1:
+        return None
+    area_twice = sum(
+        points[index][0] * points[index + 1][1] - points[index + 1][0] * points[index][1]
+        for index in range(len(points) - 1)
+    )
+    if abs(area_twice) < 1e-14:
+        return None
+    edge_count = len(points) - 1
+    for first in range(edge_count):
+        for second in range(first + 1, edge_count):
+            if second in (first, first + 1) or (first == 0 and second == edge_count - 1):
+                continue
+            if _segments_intersect(
+                points[first], points[first + 1], points[second], points[second + 1]
+            ):
+                return None
+    return points
+
+
+def _polygon_rings(raw_rings: Any) -> list[list[tuple[float, float]]] | None:
+    if not isinstance(raw_rings, list) or not raw_rings:
+        return None
+    rings = [_valid_ring(ring) for ring in raw_rings]
+    return rings if all(ring is not None for ring in rings) else None
+
+
+def _geometry_polygons(geometry: Any) -> list[list[list[tuple[float, float]]]] | None:
+    """Return valid Polygon/MultiPolygon rings; reject malformed or empty shapes."""
+    if not isinstance(geometry, dict):
+        return None
+    kind = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if kind == "Polygon":
+        polygon = _polygon_rings(coordinates)
+        return [polygon] if polygon else None
+    if kind == "MultiPolygon" and isinstance(coordinates, list) and coordinates:
+        polygons = [_polygon_rings(rings) for rings in coordinates]
+        return polygons if all(polygons) else None
+    return None
+
+
+def _score_color(score: Any):
+    """Map the C2 0–100 inspection score to a restrained sequential blue scale."""
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return None
+    if not math.isfinite(score) or not 0 <= score <= 100:
+        return None
+    fraction = float(score) / 100
+    rgb = tuple(
+        low + (high - low) * fraction for low, high in zip(_SCORE_LOW, _SCORE_HIGH, strict=True)
+    )
+    return colors.Color(*rgb)
+
+
+class _CellMap(Flowable):
+    """Vector-render ward-assigned public cell geometry without map tiles."""
+
+    def __init__(self, cells: dict[str, Any], width: float = 74 * mm, height: float = 56 * mm):
+        super().__init__()
+        self.width = width
+        self.height = height
+        self._cells = []
+        for feature in cells.get("features", []):
+            if not isinstance(feature, dict):
+                continue
+            properties = feature.get("properties", {})
+            if not isinstance(properties, dict):
+                continue
+            polygons = _geometry_polygons(feature.get("geometry"))
+            if not polygons:
+                continue
+            suppressed = properties.get("suppressed") is True
+            # Do not even read score properties for suppressed cells.
+            fill = _score_color(None if suppressed else properties.get("cell_score"))
+            self._cells.append((polygons, suppressed, fill))
+
+    def wrap(self, avail_width: float, avail_height: float) -> tuple[float, float]:
+        return min(self.width, avail_width), self.height
+
+    def draw(self) -> None:
+        canvas = self.canv
+        canvas.saveState()
+        canvas.setFont("Helvetica-Bold", 6.6)
+        canvas.setFillColor(_INK)
+        canvas.drawString(0, self.height - 7, "Ward-assigned grid-cell overview")
+        canvas.setFont("Helvetica", 5.8)
+        canvas.setFillColor(_MUTED)
+        canvas.drawString(0, self.height - 14, "Cell shapes; not an administrative boundary")
+
+        left, bottom = 3, 24
+        plot_width, plot_height = self.width - 6, self.height - 43
+        if not self._cells:
+            canvas.setStrokeColor(_RULE)
+            canvas.setFillColor(_PALE)
+            canvas.roundRect(left, bottom, plot_width, plot_height, 2, stroke=1, fill=1)
+            canvas.setFillColor(_MUTED)
+            canvas.setFont("Helvetica", 6)
+            canvas.drawCentredString(
+                left + plot_width / 2,
+                bottom + plot_height / 2,
+                "Map unavailable: no usable cell geometry",
+            )
+        else:
+            points = [
+                point
+                for polygons, _, _ in self._cells
+                for rings in polygons
+                for ring in rings
+                for point in ring[:-1]
+            ]
+            mid_lat = sum(lat for _, lat in points) / len(points)
+            x_factor = math.cos(math.radians(mid_lat))
+            transformed = [(lon * x_factor, lat) for lon, lat in points]
+            min_x = min(x for x, _ in transformed)
+            max_x = max(x for x, _ in transformed)
+            min_y = min(y for _, y in transformed)
+            max_y = max(y for _, y in transformed)
+            span_x = max(max_x - min_x, 1e-12)
+            span_y = max(max_y - min_y, 1e-12)
+            scale = min(plot_width / span_x, plot_height / span_y)
+            offset_x = left + (plot_width - span_x * scale) / 2
+            offset_y = bottom + (plot_height - span_y * scale) / 2
+
+            def xy(point):
+                lon, lat = point
+                return (
+                    offset_x + (lon * x_factor - min_x) * scale,
+                    offset_y + (lat - min_y) * scale,
+                )
+
+            for polygons, suppressed, fill in self._cells:
+                for rings in polygons:
+                    path = canvas.beginPath()
+                    for ring in rings:
+                        ring_xy = [xy(point) for point in ring]
+                        path.moveTo(*ring_xy[0])
+                        for point in ring_xy[1:]:
+                            path.lineTo(*point)
+                        path.close()
+                    canvas.setStrokeColor(colors.white)
+                    canvas.setLineWidth(0.35)
+                    canvas.setFillColor(_SUPPRESSED if suppressed or fill is None else fill)
+                    canvas.drawPath(path, stroke=1, fill=1, fillMode=0)
+                    if suppressed:
+                        canvas.saveState()
+                        canvas.clipPath(path, stroke=0, fill=0)
+                        canvas.setStrokeColor(colors.HexColor("#8A969F"))
+                        canvas.setLineWidth(0.35)
+                        bounds = [xy(point) for ring in rings for point in ring]
+                        low_x = min(x for x, _ in bounds)
+                        high_x = max(x for x, _ in bounds)
+                        low_y = min(y for _, y in bounds)
+                        high_y = max(y for _, y in bounds)
+                        start = low_x - (high_y - low_y)
+                        while start < high_x:
+                            canvas.line(start, low_y, start + (high_y - low_y), high_y)
+                            start += 4
+                        canvas.restoreState()
+
+        legend_y = 4
+        canvas.setFont("Helvetica", 5.6)
+        canvas.setFillColor(_MUTED)
+        for index, score in enumerate((0, 50, 100)):
+            canvas.setFillColor(_score_color(score))
+            canvas.rect(2 + index * 7, legend_y, 7, 5, stroke=0, fill=1)
+        canvas.setFillColor(_MUTED)
+        canvas.drawString(24, legend_y + 0.5, "Lower to higher relative inspection priority")
+        suppressed_x = 3
+        canvas.setFillColor(_SUPPRESSED)
+        canvas.setStrokeColor(_MUTED)
+        canvas.rect(suppressed_x, legend_y + 8, 7, 5, stroke=1, fill=1)
+        canvas.setFillColor(_MUTED)
+        canvas.drawString(suppressed_x + 9, legend_y + 8.5, "Suppressed: no score displayed")
+        canvas.setFillColor(colors.white)
+        canvas.rect(115, legend_y + 8, 7, 5, stroke=1, fill=1)
+        canvas.setFillColor(_MUTED)
+        canvas.drawString(124, legend_y + 8.5, "No C2 score")
+        canvas.drawString(
+            3, legend_y + 16, "Relative inspection priority, not collapse probability"
+        )
+        canvas.restoreState()
 
 
 def _display(value: Any, suffix: str = "") -> str:
@@ -171,7 +393,8 @@ def generate_brief_pdf(
         Spacer(1, 4),
         _paragraph("Ward indicators", styles["section"]),
     ]
-    metrics = Table(_metric_rows(ward, styles), colWidths=[66 * mm, 112 * mm], hAlign="LEFT")
+    metric_rows = _metric_rows(ward, styles)
+    metrics = Table(metric_rows, colWidths=[40 * mm, 62 * mm], hAlign="LEFT")
     metrics.setStyle(
         TableStyle(
             [
@@ -185,7 +408,23 @@ def generate_brief_pdf(
             ]
         )
     )
-    story.extend([metrics, Spacer(1, 4)])
+    overview = Table(
+        [[metrics, _CellMap(cells)]],
+        colWidths=[102 * mm, 76 * mm],
+        hAlign="LEFT",
+    )
+    overview.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    story.extend([overview, Spacer(1, 4)])
 
     status = ward.get("status")
     if status == "insufficient_data":

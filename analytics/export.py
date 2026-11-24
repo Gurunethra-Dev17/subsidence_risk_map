@@ -544,7 +544,10 @@ def _write_json(path: Path, payload: dict[str, Any], overwrite: bool) -> None:
 
 
 def _make_figures(
-    wards: list[dict[str, Any]], sensitivity_rows: list[dict[str, str]], figure_dir: Path
+    wards: list[dict[str, Any]],
+    sensitivity_rows: list[dict[str, str]],
+    figure_dir: Path,
+    city: str = "",
 ) -> list[dict[str, str]]:
     figure_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str((figure_dir / ".mplconfig").resolve()))
@@ -557,13 +560,19 @@ def _make_figures(
         raise ExportError("Figure generation requires matplotlib from the geo extra") from exc
 
     records: list[dict[str, str]] = []
+    city_label = city.strip().title()
+    prefix = f"{city_label} " if city_label else ""
     ranked = [row for row in wards if row["status"] == "ranked" and row["score"] is not None]
     if ranked:
         fig, ax = plt.subplots(figsize=(7, 4))
         ax.hist(
             [row["score"] for row in ranked], bins=min(15, max(5, len(ranked))), color="#386cb0"
         )
-        ax.set(title="Ward inspection-index score distribution", xlabel="Score", ylabel="Wards")
+        ax.set(
+            title=f"{prefix}ward inspection-index score distribution",
+            xlabel="Score",
+            ylabel="Wards",
+        )
         fig.tight_layout()
         name = "ward_score_distribution.png"
         fig.savefig(figure_dir / name, dpi=120, metadata={"Software": "D8 contract exporter"})
@@ -572,9 +581,35 @@ def _make_figures(
             {
                 "id": "ward_score_distribution",
                 "path": str((figure_dir / name).as_posix()),
-                "caption": "Distribution of supplied ranked-ward scores; no validation comparison.",
+                "caption": f"{city_label or 'Supplied-city'} ranked-ward scores; no validation comparison.",
             }
         )
+
+        top = sorted(ranked, key=lambda row: row["rank"])[:15]
+        if top and all(row["rank_p05"] is not None and row["rank_p95"] is not None for row in top):
+            fig, ax = plt.subplots(figsize=(8, 5))
+            y = list(range(len(top)))
+            ranks = [row["rank"] for row in top]
+            low = [row["rank"] - row["rank_p05"] for row in top]
+            high = [row["rank_p95"] - row["rank"] for row in top]
+            ax.errorbar(ranks, y, xerr=[low, high], fmt="o", capsize=2)
+            ax.set_yticks(y, [row["ward_name"] for row in top])
+            ax.set(
+                title=f"{prefix}top 15 wards: baseline ranks and D4 ranges",
+                xlabel="Rank (1 is highest priority)",
+            )
+            ax.invert_yaxis()
+            fig.tight_layout()
+            name = "top_priority_ward_ranges.png"
+            fig.savefig(figure_dir / name, dpi=120, metadata={"Software": "D8 contract exporter"})
+            plt.close(fig)
+            records.append(
+                {
+                    "id": "top_priority_ward_ranges",
+                    "path": str((figure_dir / name).as_posix()),
+                    "caption": f"{city_label or 'Supplied-city'} top 15 ward ranks with D4 ranges; descriptive priority, not collapse probability.",
+                }
+            )
 
     if ranked and all(
         row["rank_p05"] is not None and row["rank_p95"] is not None for row in ranked
@@ -587,7 +622,7 @@ def _make_figures(
         high = [row["rank_p95"] - row["rank"] for row in ordered]
         ax.errorbar(x, y, yerr=[low, high], fmt=".", markersize=3, capsize=1)
         ax.set(
-            title="Ward ranks and supplied 5th–95th percentile ranges",
+            title=f"{prefix}ward ranks and supplied 5th–95th percentile ranges",
             xlabel="Ward ordered by rank",
             ylabel="Rank (1 is highest)",
         )
@@ -600,7 +635,7 @@ def _make_figures(
             {
                 "id": "ward_rank_ranges",
                 "path": str((figure_dir / name).as_posix()),
-                "caption": "Rank intervals copied from the supplied sensitivity input.",
+                "caption": f"{city_label or 'Supplied-city'} rank intervals copied from sensitivity input.",
             }
         )
 
@@ -613,7 +648,7 @@ def _make_figures(
             fig, ax = plt.subplots(figsize=(6, 4))
             ax.hist(widths, bins=min(15, max(5, len(widths))), color="#7fc97f")
             ax.set(
-                title="Supplied sensitivity rank-range widths",
+                title=f"{prefix}supplied sensitivity rank-range widths",
                 xlabel="rank_max − rank_min",
                 ylabel="Wards",
             )
@@ -625,9 +660,205 @@ def _make_figures(
                 {
                     "id": "sensitivity_rank_range_width",
                     "path": str((figure_dir / name).as_posix()),
-                    "caption": "Distribution of rank-range widths in the supplied sensitivity CSV.",
+                    "caption": f"{city_label or 'Supplied-city'} distribution of rank-range widths in sensitivity CSV.",
                 }
             )
+    plt.close("all")
+    return records
+
+
+def _make_supplemental_figures(
+    figure_data: dict[str, Any],
+    validation: dict[str, Any],
+    figure_dir: Path,
+    city: str,
+) -> list[dict[str, str]]:
+    """Plot accepted D4/C1 summaries and C3 references without recalculating analytics."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+    except ImportError as exc:
+        raise ExportError("Figure generation requires matplotlib from the geo extra") from exc
+
+    label = city.strip().title() or "Supplied city"
+    records: list[dict[str, str]] = []
+    sensitivity = figure_data.get("weight_sensitivity")
+    if isinstance(sensitivity, dict):
+        tau = sensitivity.get("kendall_tau_vs_baseline")
+        if isinstance(tau, dict) and all(
+            isinstance(tau.get(key), (int, float))
+            for key in ("minimum", "median", "mean", "maximum")
+        ):
+            fig, ax = plt.subplots(figsize=(7, 3.5))
+            low, median, mean, high = (
+                float(tau[key]) for key in ("minimum", "median", "mean", "maximum")
+            )
+            ax.hlines(0, low, high, color="#386cb0", linewidth=3)
+            ax.plot(median, 0, "o", label="Median")
+            ax.plot(mean, 0, "D", label="Mean")
+            ax.set(xlim=(-1, 1), ylim=(-0.5, 0.5), yticks=[], xlabel="Kendall τ vs baseline")
+            ax.set_title(f"{label} D4 weight-perturbation rank stability")
+            ax.legend(loc="upper right")
+            ax.text(
+                0.02,
+                0.08,
+                f"{sensitivity.get('draws_completed')} draws; descriptive summary",
+                transform=ax.transAxes,
+            )
+            fig.tight_layout()
+            name = "weight_perturbation_rank_stability.png"
+            fig.savefig(figure_dir / name, dpi=120, metadata={"Software": "D8 contract exporter"})
+            plt.close(fig)
+            records.append(
+                {
+                    "id": "weight_perturbation_rank_stability",
+                    "path": str((figure_dir / name).as_posix()),
+                    "caption": f"{label} D4 Kendall tau summary across supplied weight perturbations; not an independent validation metric.",
+                }
+            )
+
+    variants = figure_data.get("a7_variants")
+    if isinstance(variants, list) and variants:
+        parsed = [row for row in variants if isinstance(row, dict)]
+        if parsed:
+            fig, ax = plt.subplots(figsize=(9, 4.5))
+            pair_labels = sorted(
+                {f"{row.get('pair_min_m')}–{row.get('pair_max_m')} m" for row in parsed}
+            )
+            radius_values = sorted({int(row["radius_m"]) for row in parsed})
+            offsets = {
+                radius: (index - (len(radius_values) - 1) / 2) * 0.18
+                for index, radius in enumerate(radius_values)
+            }
+            colors = {
+                radius: color
+                for radius, color in zip(
+                    radius_values, ("#1b9e77", "#d95f02", "#7570b3"), strict=False
+                )
+            }
+            for row in parsed:
+                x = pair_labels.index(f"{row.get('pair_min_m')}–{row.get('pair_max_m')} m")
+                radius = int(row["radius_m"])
+                value = row.get("kendall_tau_vs_baseline")
+                xpos = x + offsets[radius]
+                if isinstance(value, (int, float)):
+                    ax.scatter(xpos, float(value), color=colors[radius])
+                else:
+                    ax.text(
+                        xpos,
+                        0.035,
+                        "n/a",
+                        color=colors[radius],
+                        ha="center",
+                        fontsize=7,
+                    )
+            ax.set_xticks(range(len(pair_labels)), pair_labels)
+            ax.set_ylim(-0.05, 1.05)
+            ax.set_ylabel("Kendall τ vs D3 baseline (unavailable shown n/a)")
+            ax.set_title(f"{label} A7 radius and pair-window rank sensitivity")
+            legend_handles = [
+                Line2D([0], [0], marker="o", color=color, linestyle="", label=f"{radius} m")
+                for radius, color in colors.items()
+            ]
+            ax.legend(
+                handles=legend_handles,
+                title="Radius",
+                ncol=len(radius_values),
+                loc="lower right",
+            )
+            fig.tight_layout()
+            name = "a7_radius_pair_sensitivity.png"
+            fig.savefig(figure_dir / name, dpi=120, metadata={"Software": "D8 contract exporter"})
+            plt.close(fig)
+            records.append(
+                {
+                    "id": "a7_radius_pair_sensitivity",
+                    "path": str((figure_dir / name).as_posix()),
+                    "caption": f"{label} D4 rank correlations for nine A7 variants; 50 m variants are unavailable because no wards ranked. Parameter hashes differ from baseline C1 where recorded.",
+                }
+            )
+
+    availability = figure_data.get("c1_availability")
+    if isinstance(availability, dict):
+        total = availability.get("total_buildings")
+        metrics = [
+            ("VLM velocity", availability.get("vlm_nonnull")),
+            ("Angular distortion", availability.get("beta_horizon_nonnull")),
+        ]
+        if (
+            isinstance(total, int)
+            and total > 0
+            and all(isinstance(value, int) for _, value in metrics)
+        ):
+            present = [value for _, value in metrics]
+            missing = [total - value for value in present]
+            fig, ax = plt.subplots(figsize=(7, 3.5))
+            y = list(range(len(metrics)))
+            ax.barh(y, present, label="Available", color="#1b9e77")
+            ax.barh(y, missing, left=present, label="Unavailable (null)", color="#d9d9d9")
+            ax.set_yticks(y, [name for name, _ in metrics])
+            ax.set_xlim(0, total)
+            ax.set_xlabel("Buildings")
+            ax.set_title(f"{label} C1 metric availability")
+            ax.legend(loc="lower right")
+            for position, value in enumerate(present):
+                ax.text(value, position, f" {value:,} available", va="center", fontsize=8)
+            fig.tight_layout()
+            name = "c1_metric_availability.png"
+            fig.savefig(figure_dir / name, dpi=120, metadata={"Software": "D8 contract exporter"})
+            plt.close(fig)
+            records.append(
+                {
+                    "id": "c1_metric_availability",
+                    "path": str((figure_dir / name).as_posix()),
+                    "caption": f"{label} C1 available and null metric counts; unavailable values are not treated as zero.",
+                }
+            )
+
+    hotspot_rows = validation.get("hotspot_check")
+    if isinstance(hotspot_rows, list) and hotspot_rows:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        assigned = [
+            row
+            for row in hotspot_rows
+            if isinstance(row, dict) and isinstance(row.get("rank"), int)
+        ]
+        unassigned = [
+            row for row in hotspot_rows if isinstance(row, dict) and row.get("rank") is None
+        ]
+        if assigned:
+            ax.scatter(
+                [row["rank"] for row in assigned],
+                [row["name"] for row in assigned],
+                color="#386cb0",
+            )
+        if unassigned:
+            for row in unassigned:
+                ax.text(
+                    0.02,
+                    0.95 - 0.08 * unassigned.index(row),
+                    f"{row['name']}: not comparable",
+                    transform=ax.transAxes,
+                )
+        ax.set_xlim(0, 250)
+        ax.invert_xaxis()
+        ax.set_xlabel("Ward inspection rank (1 is highest; nulls are not comparable)")
+        ax.set_title(f"{label} literature hotspot reference comparison")
+        fig.tight_layout()
+        name = "literature_hotspot_reference_ranks.png"
+        fig.savefig(figure_dir / name, dpi=120, metadata={"Software": "D8 contract exporter"})
+        plt.close(fig)
+        records.append(
+            {
+                "id": "literature_hotspot_reference_ranks",
+                "path": str((figure_dir / name).as_posix()),
+                "caption": f"{label}: approximate reference points only; two of four records have ward ranks. This is supplementary literature consistency, not independent validation.",
+            }
+        )
+
     plt.close("all")
     return records
 
@@ -643,7 +874,14 @@ def export_artifacts(args: argparse.Namespace) -> None:
     for path in paths:
         if not path.is_file():
             raise ExportError(f"Required input does not exist or is not a file: {path}")
+    figure_data_path = getattr(args, "figure_data_json", None)
+    if figure_data_path is not None and not figure_data_path.is_file():
+        raise ExportError(
+            f"Supplemental figure input does not exist or is not a file: {figure_data_path}"
+        )
     inputs = {path.resolve() for path in paths}
+    if figure_data_path is not None:
+        inputs.add(figure_data_path.resolve())
     outputs = [args.ward_output, args.cell_output, args.validation_output]
     if len({path.resolve() for path in outputs}) != len(outputs):
         raise ExportError("C2/C3 output paths must be distinct")
@@ -666,7 +904,16 @@ def export_artifacts(args: argparse.Namespace) -> None:
     cells = build_cell_scores(_read_csv(args.cells_csv), _read_json(args.geometry_geojson))
     validation_input = _read_json(args.validation_json) if args.validation_json else None
     validation = build_validation_summary(validation_input, generated)
-    figures = _make_figures(wards["wards"], _read_csv(args.sensitivity_csv), args.figure_dir)
+    meta_data = _read_json(args.meta_json)
+    city = str(meta_data.get("city", "")) if isinstance(meta_data, dict) else ""
+    figures = _make_figures(
+        wards["wards"], _read_csv(args.sensitivity_csv), args.figure_dir, city=city
+    )
+    if figure_data_path is not None:
+        figure_data = _read_json(figure_data_path)
+        if not isinstance(figure_data, dict):
+            raise ExportError("Supplemental figure data must be a JSON object")
+        figures.extend(_make_supplemental_figures(figure_data, validation, args.figure_dir, city))
     for figure in figures:
         figure_path = args.figure_dir / Path(figure["path"]).name
         figure["path"] = Path(
@@ -697,6 +944,11 @@ def main(argv: list[str] | None = None) -> int:
     export_parser.add_argument("--cell-output", type=Path, required=True)
     export_parser.add_argument("--validation-output", type=Path, required=True)
     export_parser.add_argument("--figure-dir", type=Path, required=True)
+    export_parser.add_argument(
+        "--figure-data-json",
+        type=Path,
+        help="Optional accepted D4/C1 summary data for supplementary figures",
+    )
     export_parser.add_argument(
         "--generated-utc", help="Fixed ISO-8601 timestamp for reproducible output"
     )

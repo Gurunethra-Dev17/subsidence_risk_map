@@ -295,6 +295,7 @@ def _cli_args(root, suffix):
         figure_dir=root / f"figures-{suffix}",
         generated_utc=FIXED_TIME,
         overwrite=False,
+        figure_data_json=None,
     )
 
 
@@ -314,10 +315,97 @@ def test_exporter_generates_repeatable_outputs_and_figures(tmp_path):
     assert before == after
     assert sorted(path.name for path in first.figure_dir.glob("*.png")) == [
         "sensitivity_rank_range_width.png",
+        "top_priority_ward_ranges.png",
         "ward_rank_ranges.png",
         "ward_score_distribution.png",
     ]
     assert json.loads(first.cell_output.read_text())["type"] == "FeatureCollection"
+    validation = json.loads(first.validation_output.read_text(encoding="utf-8"))
+    assert all("Synthetic-Test-City" in item["caption"] for item in validation["figures"])
+
+
+def test_supplemental_figures_use_only_supplied_robustness_and_availability_summaries(tmp_path):
+    args = _cli_args(tmp_path, "supplemental")
+    args.figure_data_json = tmp_path / "figure_data.json"
+    args.figure_data_json.write_text(
+        json.dumps(
+            {
+                "weight_sensitivity": {
+                    "draws_completed": 10,
+                    "kendall_tau_vs_baseline": {
+                        "minimum": 0.7,
+                        "median": 0.9,
+                        "mean": 0.88,
+                        "maximum": 1.0,
+                    },
+                },
+                "a7_variants": [
+                    {
+                        "radius_m": 50,
+                        "pair_min_m": 80,
+                        "pair_max_m": 120,
+                        "kendall_tau_vs_baseline": None,
+                    },
+                    {
+                        "radius_m": 100,
+                        "pair_min_m": 80,
+                        "pair_max_m": 120,
+                        "kendall_tau_vs_baseline": 0.99,
+                    },
+                ],
+                "c1_availability": {
+                    "total_buildings": 10,
+                    "vlm_nonnull": 8,
+                    "beta_horizon_nonnull": 4,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    args.validation_json = tmp_path / "validation.json"
+    args.validation_json.write_text(
+        json.dumps(
+            {
+                "hotspot_check": [
+                    {
+                        "name": "Example",
+                        "source": "Study",
+                        "ward_id": "w1",
+                        "rank": 1,
+                        "percentile": 100,
+                    },
+                    {
+                        "name": "Outside",
+                        "source": "Study",
+                        "ward_id": None,
+                        "rank": None,
+                        "percentile": None,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    export_artifacts(args)
+
+    validation = json.loads(args.validation_output.read_text(encoding="utf-8"))
+    figure_ids = {item["id"] for item in validation["figures"]}
+    assert {
+        "weight_perturbation_rank_stability",
+        "a7_radius_pair_sensitivity",
+        "c1_metric_availability",
+        "literature_hotspot_reference_ranks",
+    } <= figure_ids
+    assert len(list(args.figure_dir.glob("*.png"))) == len(validation["figures"])
+    assert (
+        "approximate reference points"
+        in next(
+            item["caption"]
+            for item in validation["figures"]
+            if item["id"] == "literature_hotspot_reference_ranks"
+        ).lower()
+    )
 
 
 def test_figures_are_omitted_when_data_cannot_support_them(tmp_path):
@@ -330,7 +418,7 @@ def test_figures_are_omitted_when_data_cannot_support_them(tmp_path):
             "rank_p95": None,
         }
     ]
-    assert _make_figures(insufficient, [], tmp_path / "no_figures") == []
+    assert _make_figures(insufficient, [], tmp_path / "no_figures", city="Delhi") == []
 
 
 def test_existing_outputs_are_not_overwritten_without_flag(tmp_path):

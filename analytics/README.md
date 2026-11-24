@@ -41,3 +41,13 @@ The D8 exporter is a phase-one contract boundary. Mock/synthetic output demonstr
 it does not complete H3 or validate real Delhi data. Final output still depends on reconciled C0/C1,
 confirmed groundwater boundaries, corrected upstream ranking/rank-range artifacts, supplied cell
 geometry, and available independent validation inputs.
+
+### Supplemental real-data figures
+
+For an accepted real-data run, analytics.export export can additionally take
+--figure-data-json containing already-computed D4 weight_sensitivity and a7_variants
+summaries plus C1 metric-availability counts. The exporter only visualizes these supplied
+summaries; it does not rerun sensitivity analyses or derive new measurements. It may also use
+the supplied C3 hotspot_check rows to draw the literature-reference figure. Missing or
+unavailable comparisons remain labeled as unavailable. These figures are descriptive and do
+not constitute independent validation.

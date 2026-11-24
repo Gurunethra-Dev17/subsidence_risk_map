@@ -1,4 +1,4 @@
-# Person A: engine method
+﻿# Person A: engine method
 
 This note describes the implemented A1-A7 geospatial engine and the interpretation limits of its C1 outputs. The formulas and parameter values below reflect the code and the Delhi C6 configuration; configuration values can differ by city.
 
@@ -48,7 +48,7 @@ It is not a forecast. The engine formats the result as the nearest reciprocal `1
 
 For the Delhi defaults `[1000, 500]`, the watch threshold is 0.001 and the inspect threshold is 0.002. These are configured indicator bands, not probabilities of damage or failure.
 
-The worked example in the tests uses rates âˆ’10 and âˆ’6 mm/year separated by 20 m. It gives \(\beta_{ij}=0.0002\) per year and, at a 10-year horizon, \(\beta_{horizon}=0.002\), reported as `1/500` and classified `inspect` under the Delhi defaults.
+The worked example in the tests uses rates −10 and −6 mm/year separated by 20 m. It gives \(\beta_{ij}=0.0002\) per year and, at a 10-year horizon, \(\beta_{horizon}=0.002\), reported as `1/500` and classified `inspect` under the Delhi defaults.
 
 ## C1 assembly and metadata
 
@@ -72,7 +72,7 @@ Parquet metadata records the C1 contract version, horizon, seed, engine version,
 
 The robustness runner evaluates the Cartesian product of `radius_variants_m` and `pair_distance_variants_m`. It reuses A2 assignments for each radius across pair windows and reuses A3 distortion results for each pair window across radii. Each variant receives its own C1 output and parameter hash, with a summary containing row counts and non-null VLM coverage.
 
-The Delhi configuration has three radii (50, 100, and 150 m) and three pair windows (10â€“40, 10â€“60, and 20â€“60 m), for nine variants. Robustness variants are sensitivity runs, not independent observations or probabilistic confidence intervals.
+The Delhi configuration has three radii (50, 100, and 150 m) and three pair windows (80–100, 80–120, and 80–160 m), for nine variants. The original 10–60 m interval yielded no eligible point pairs on the supplied Delhi VLM grid: the minimum nearest-neighbor distance among distinct points is about 81 m, and the median is about 83.8 m. The wider windows match the observed sampling spacing; a 5,500-building citywide sample yielded at least three pairs for 2.35%, 12.82%, and 16.84% of buildings in the respective windows. Full-city counts were 41,296, 238,115, and 311,017 buildings. These counts are the same across radii because the A3 pair calculation is independent of the A2 radius. Robustness variants are sensitivity runs, not independent observations or probabilistic confidence intervals.
 
 ## Parameters used by the Delhi run
 
@@ -81,12 +81,12 @@ The Delhi configuration has three radii (50, 100, and 150 m) and three pair wind
 | `utm_epsg` | 32643 | Projected CRS for metric calculations |
 | `radius_m` | 100 | A2 centroid search radius |
 | `min_points` | 3 | Minimum observations for non-null A2 estimates |
-| `pair_min_m`, `pair_max_m` | 10, 60 | Inclusive A3 pair-distance bounds |
+| `pair_min_m`, `pair_max_m` | 80, 120 | Inclusive A3 pair-distance bounds for the Delhi VLM grid |
 | `footprint_buffer_m` | 20 | A3 footprint expansion for pair membership |
 | `horizon_years` | 10 | Scenario multiplier for cumulative distortion |
 | `class_edges_ratio` | `[1000, 500]` | Denominator thresholds for `watch` and `inspect` |
 | `radius_variants_m` | `[50, 100, 150]` | A7 A2 sensitivity variants |
-| `pair_distance_variants_m` | `[[10, 40], [10, 60], [20, 60]]` | A7 A3 sensitivity variants |
+| `pair_distance_variants_m` | `[[80, 100], [80, 120], [80, 160]]` | A7 A3 sensitivity variants |
 
 ## Interpretation limits
 
@@ -100,5 +100,4 @@ The Delhi configuration has three radii (50, 100, and 150 m) and three pair wind
 
 ## Verification snapshot
 
-The A3 worked example is covered by `engine/tests/test_distortion.py`. The full local test suite and Ruff pass. A full-city internal run using engine revision `88a5d61` processed 1,883,862 buildings in 575 seconds with chunk size 5,000; 1,055,505 buildings had non-null VLM estimates (56.03%). C1 metadata, row count, building ID uniqueness, sparse/null consistency, and parameter-hash consistency were checked on the local output. This result is not published because the input pack's licence is unresolved.
-
+The A3 worked example is covered by `engine/tests/test_distortion.py`. The full local test suite and Ruff passed before this parameter correction; they were not rerun for it. The corrected full-city internal run used engine revision `f3af18a`, processed 1,883,862 buildings in 744.9 seconds at chunk size 5,000, and had 1,055,505 non-null VLM estimates (56.03%). The C1 output has 238,115 buildings with at least three eligible pairs; beta fields are non-null exactly for those rows. Row count, unique IDs, C1 metadata, sparse/null consistency, and parameter-hash consistency were checked. The output is not published because the input pack's ward-source licence is unresolved.

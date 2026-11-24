@@ -1,4 +1,4 @@
-"""Safe adapter from an optional E7 dry-run manifest to the C3 status field."""
+"""Safe adapter from optional E7 status manifests to the C3 status field."""
 
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ NOT_RUN = {
 DRY_RUN_NOTE = (
     "ASF catalog metadata contains a repeat-pass VV shortlist; no HyP3 job was "
     "submitted and no displacement product is available."
+)
+PROCESSED_NOTE = (
+    "An ASF HyP3 fresh InSAR product is available for {reference} to {secondary}. "
+    "The historical pattern/sign comparison and independent validation were not run; "
+    "this is relative line-of-sight motion, not vertical subsidence, and existing risk scores are unchanged."
 )
 
 
@@ -86,14 +91,74 @@ def _valid_dry_run_manifest(manifest: Any) -> bool:
     return math.isclose(separation, expected, rel_tol=1e-9, abs_tol=1e-9)
 
 
+def _valid_product_status_manifest(manifest: Any) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    if (
+        manifest.get("schema") != "E7_PRODUCT_STATUS@1.0"
+        or manifest.get("processing_status") != "processed"
+        or manifest.get("fresh_data_check_status") != "not_run"
+        or manifest.get("api_status") != "processed_not_validated"
+        or manifest.get("polarization") != "VV"
+        or manifest.get("flight_direction") not in {"ASCENDING", "DESCENDING"}
+    ):
+        return False
+    if not isinstance(manifest.get("product_id"), str) or not manifest["product_id"]:
+        return False
+    reference = manifest.get("reference_acquisition_date")
+    secondary = manifest.get("secondary_acquisition_date")
+    try:
+        reference_date = datetime.strptime(reference, "%Y-%m-%d").date()
+        secondary_date = datetime.strptime(secondary, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return False
+    separation = manifest.get("temporal_separation_days")
+    if isinstance(separation, bool) or not isinstance(separation, int):
+        return False
+    if (secondary_date - reference_date).days != separation or separation <= 0:
+        return False
+    threshold = manifest.get("coherence_threshold")
+    coverage = manifest.get(
+        "usable_pixel_intersection_area_pct_of_ward_union",
+        manifest.get("usable_pixel_area_estimate_pct_of_ward_union"),
+    )
+    for value, low, high in ((threshold, 0, 1), (coverage, 0, 100)):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or not low < value <= high
+        ):
+            return False
+    targets = manifest.get("target_ward_coverage")
+    if not isinstance(targets, dict):
+        return False
+    for name in ("BIJWASAN", "MAHIPALPUR"):
+        row = targets.get(name)
+        if not isinstance(row, dict) or not isinstance(row.get("ward_id"), str):
+            return False
+        value = row.get(
+            "usable_pixel_intersection_area_pct", row.get("usable_pixel_area_estimate_pct")
+        )
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or not 0 <= value <= 100
+        ):
+            return False
+    return True
+
+
 def validation_with_insar_status(
     validation_summary: dict[str, Any], manifest_path: str | Path | None = None
 ) -> dict[str, Any]:
-    """Copy C3 and update only ``fresh_data_check`` from an optional manifest.
+    """Copy C3 and update only ``fresh_data_check`` from an optional E7 manifest.
 
-    The path is explicit via argument or ``API_INSAR_MANIFEST_PATH``. There is
+    The path is explicit via argument or ``API_INSAR_MANIFEST_PATH``. Dry-run
+    discovery and processed-product status have separate validators. There is
     intentionally no repository-local output default, so hosted deployments
-    without the ignored local manifest retain a truthful not-run status.
+    without an ignored local manifest retain a truthful not-run status.
     """
     configured = manifest_path
     if configured is None:
@@ -105,7 +170,15 @@ def validation_with_insar_status(
                 manifest = json.load(stream)
         except (OSError, UnicodeError, json.JSONDecodeError):
             manifest = None
-        if _valid_dry_run_manifest(manifest):
+        if _valid_product_status_manifest(manifest):
+            status = {
+                "status": "processed_not_validated",
+                "note": PROCESSED_NOTE.format(
+                    reference=manifest["reference_acquisition_date"],
+                    secondary=manifest["secondary_acquisition_date"],
+                ),
+            }
+        elif _valid_dry_run_manifest(manifest):
             status = {"status": "not_submitted", "note": DRY_RUN_NOTE}
 
     result = dict(validation_summary)

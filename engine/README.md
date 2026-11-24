@@ -14,7 +14,7 @@ The point loader requires the optional geospatial dependencies: `pip install -e 
 
 ## Building distortion (A3)
 
-`engine.distortion.compute_building_distortion(buildings, points, cfg)` projects building footprints and VLM points into the configured UTM zone. It considers distinct point pairs inside the configured inclusive distance window when at least one endpoint lies within a building footprint buffered by `footprint_buffer_m`. Delhi uses 80–120 m because the supplied VLM grid's nearest distinct points are about 81 m apart; the original 10–60 m window produced no pairs. Pair distortion is `abs(v_i - v_j) * 1e-3 / distance_m` per year. The building rate is the 90th percentile; fewer than three pairs produce null distortion metrics. The rate is multiplied by `horizon_years` as a scenario, formatted as a `1/N` ratio, and classified using `class_edges_ratio`. The returned frame preserves building order and contains the C1 distortion columns.
+`engine.distortion.compute_building_distortion(buildings, points, cfg)` projects building footprints and VLM points into the configured UTM zone. It considers distinct point pairs 10–60 m apart by default when at least one endpoint lies within a building footprint buffered by `footprint_buffer_m`. Pair distortion is `abs(v_i - v_j) * 1e-3 / distance_m` per year. The building rate is the 90th percentile; fewer than three pairs produce null distortion metrics. The rate is multiplied by `horizon_years` as a scenario, formatted as a `1/N` ratio, and classified using `class_edges_ratio`. The returned frame preserves building order and contains the C1 distortion columns.
 
 ## C1 export (A6)
 

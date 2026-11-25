@@ -6,6 +6,7 @@ import { insufficientBand, scoreBand, scoreBands, unavailableBand } from '../war
 
 export const wardSource = 'inspection-wards'
 export const wardFill = 'inspection-ward-fill'
+export const wardOutline = 'inspection-ward-outline'
 export const selectedLine = 'inspection-ward-selected'
 const selectedHalo = 'inspection-ward-halo'
 const hatch = 'inspection-hatch'
@@ -60,7 +61,7 @@ export function wardLayers(vector: boolean, tileWards?: ReadonlyMap<string, Ward
     { id: wardFill, type: 'fill', ...source, paint: { 'fill-color': paint, 'fill-opacity': 0.57 } },
     { id: 'inspection-ward-hatch', type: 'fill', ...source, filter: hatchFilter,
       paint: { 'fill-pattern': hatch } },
-    { id: 'inspection-ward-outline', type: 'line', ...source,
+    { id: wardOutline, type: 'line', ...source,
       paint: { 'line-color': '#344960', 'line-opacity': 0.8, 'line-width': 1.4 } },
     { id: selectedHalo, type: 'line', ...source, filter: wardFilter(null),
       paint: { 'line-color': '#fff', 'line-width': 6 }, layout: { 'line-join': 'round' } },

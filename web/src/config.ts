@@ -8,6 +8,7 @@ const assets = 'http://127.0.0.1:8003/delhi'
 export const config = {
   internal,
   e9,
+  freshInsar: e9 && import.meta.env.VITE_E7_INTERNAL_PREVIEW?.trim().toLowerCase() === 'true',
   mock,
   requireReal: e9 || (!mock && !internal && import.meta.env.VITE_REQUIRE_REAL_DELHI?.trim().toLowerCase() === 'true'),
   apiUrl: e9 ? 'http://127.0.0.1:8002/api/v1' : internal ? '/__delhi_preview/api' : (import.meta.env.VITE_API_URL?.trim() || (localIntegration ? 'http://127.0.0.1:8000/api/v1' : '/api/v1')).replace(/\/+$/, ''),

@@ -4,10 +4,11 @@ import browserConfig from './playwright.config'
 if (!process.env.E9_TEST_AUTHORITY_TOKEN) {
   throw new Error('Supply the temporary local E9 token to the test process.')
 }
+const e7 = process.env.VITE_E7_INTERNAL_PREVIEW?.trim().toLowerCase() === 'true'
 
 export default defineConfig({
   ...browserConfig,
-  testMatch: '**/e9.spec.ts',
+  testMatch: e7 ? ['**/e9.spec.ts', '**/e7.spec.ts'] : '**/e9.spec.ts',
   testIgnore: [],
   outputDir: '.npm-cache/e9-test-results',
   timeout: 100_000,

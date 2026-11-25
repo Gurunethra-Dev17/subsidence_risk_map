@@ -66,8 +66,11 @@ export default defineConfig(({ command, mode, isPreview }) => {
   if (Object.keys(env).some((key) => /(?:TOKEN|SECRET|PASSWORD)/i.test(key))) {
     throw new Error('Keep credentials out of all VITE_* configuration.')
   }
-  for (const key of ['VITE_MOCK_MODE', 'VITE_BASEMAP_ENABLED', 'VITE_REQUIRE_REAL_DELHI']) {
+  for (const key of ['VITE_MOCK_MODE', 'VITE_BASEMAP_ENABLED', 'VITE_REQUIRE_REAL_DELHI', 'VITE_E7_INTERNAL_PREVIEW']) {
     if (env[key]?.trim() && !/^(true|false)$/i.test(env[key].trim())) throw new Error(`${key} must be true or false.`)
+  }
+  if (env.VITE_E7_INTERNAL_PREVIEW?.trim().toLowerCase() === 'true' && !e9) {
+    throw new Error('The E7 artifact preview requires the loopback E9 development mode.')
   }
   for (const key of ['VITE_API_URL', 'VITE_WARDS_GEOJSON_URL', 'VITE_WARD_GEOJSON_FALLBACK_URL', 'VITE_WARDS_TILE_URL', 'VITE_CELLS_TILE_URL', 'VITE_POINTS_TILE_URL', 'VITE_BASEMAP_TILE_URL', 'VITE_BASEMAP_STYLE_URL']) {
     if (!env[key]?.trim()) continue

@@ -142,6 +142,158 @@ async function enterAuthority(page: Page, token: string) {
   await page.getByRole('button', { name: 'Verify access' }).click()
 }
 
+type Ring = number[][]
+type PolygonCoordinates = Ring[]
+type BuildingClickCandidate = { featureIndex: number; featureId: string; point: [number, number]; width: number }
+
+function pointInRing(ring: Ring, point: [number, number]) {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [x1, y1] = ring[i]
+    const [x2, y2] = ring[j]
+    if ((y1 > point[1]) !== (y2 > point[1]) &&
+      point[0] < ((x2 - x1) * (point[1] - y1)) / (y2 - y1) + x1) inside = !inside
+  }
+  return inside
+}
+
+function pointInPolygon(polygon: PolygonCoordinates, point: [number, number]) {
+  return Boolean(polygon[0]?.length && pointInRing(polygon[0], point) &&
+    !polygon.slice(1).some((hole) => pointInRing(hole, point)))
+}
+
+function scanlineInterior(polygon: PolygonCoordinates): { point: [number, number]; width: number } | null {
+  const exterior = polygon[0]
+  if (!exterior || exterior.length < 4) return null
+  const latitudes = [...new Set(exterior.map(([, latitude]) => latitude))].sort((a, b) => a - b)
+  let best: { point: [number, number]; width: number } | null = null
+
+  const intersections = (ring: Ring, latitude: number) => {
+    const longitudes: number[] = []
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [x1, y1] = ring[j]
+      const [x2, y2] = ring[i]
+      if ((y1 > latitude) !== (y2 > latitude)) {
+        longitudes.push(x1 + ((latitude - y1) * (x2 - x1)) / (y2 - y1))
+      }
+    }
+    longitudes.sort((a, b) => a - b)
+    const intervals: [number, number][] = []
+    for (let i = 0; i + 1 < longitudes.length; i += 2) {
+      if (longitudes[i + 1] > longitudes[i]) intervals.push([longitudes[i], longitudes[i + 1]])
+    }
+    return intervals
+  }
+
+  for (let i = 0; i + 1 < latitudes.length; i++) {
+    const latitude = (latitudes[i] + latitudes[i + 1]) / 2
+    let segments = intersections(exterior, latitude)
+    for (const hole of polygon.slice(1)) {
+      for (const [holeWest, holeEast] of intersections(hole, latitude)) {
+        segments = segments.flatMap(([west, east]) => {
+          if (holeEast <= west || holeWest >= east) return [[west, east] as [number, number]]
+          const remaining: [number, number][] = []
+          if (holeWest > west) remaining.push([west, holeWest])
+          if (holeEast < east) remaining.push([holeEast, east])
+          return remaining
+        })
+      }
+    }
+    for (const [west, east] of segments) {
+      const point: [number, number] = [(west + east) / 2, latitude]
+      const width = east - west
+      if (width > 0 && pointInPolygon(polygon, point) && (!best || width > best.width)) best = { point, width }
+    }
+  }
+  return best
+}
+
+function buildingInteriorCandidates(collection: Api['BuildingFeatureCollection']): BuildingClickCandidate[] {
+  const candidates: BuildingClickCandidate[] = []
+  collection.features.forEach(({ geometry, properties }, featureIndex) => {
+    if (typeof properties.bldg_id !== 'string' || !geometry) return
+    const polygons: PolygonCoordinates[] = geometry.type === 'Polygon'
+      ? [geometry.coordinates as PolygonCoordinates]
+      : geometry.type === 'MultiPolygon' ? geometry.coordinates as PolygonCoordinates[] : []
+    for (const polygon of polygons) {
+      const interior = scanlineInterior(polygon)
+      if (interior) candidates.push({ featureIndex, featureId: properties.bldg_id, ...interior })
+    }
+  })
+  return candidates.sort((a, b) => b.width - a.width)
+}
+
+async function findRenderedBuildingClick(page: Page, candidates: BuildingClickCandidate[]) {
+  return page.evaluate((points) => {
+    type MapLike = {
+      project: (coordinate: [number, number]) => { x: number; y: number }
+      getContainer: () => HTMLElement
+      getCanvas: () => HTMLCanvasElement
+      getZoom: () => number
+      getLayer: (id: string) => { minzoom?: number } | undefined
+      getLayoutProperty: (id: string, name: string) => unknown
+      queryRenderedFeatures: (point: { x: number; y: number }, options: { layers: string[] }) =>
+        { properties?: Record<string, unknown>; layer: { id: string } }[]
+    }
+    const root = document.getElementById('root')
+    const rootKey = root && Object.keys(root).find((key) => key.startsWith('__reactContainer$'))
+    const fiberRoot = rootKey
+      ? (root as HTMLElement & Record<string, unknown>)[rootKey] as { stateNode?: { current?: unknown } }
+      : null
+    const stack = [fiberRoot?.stateNode?.current ?? fiberRoot]
+    const seen = new Set<object>()
+    let map: MapLike | null = null
+    while (stack.length && !map) {
+      const fiber = stack.pop() as {
+        memoizedState?: { memoizedState?: unknown; next?: unknown } | null
+        child?: unknown
+        sibling?: unknown
+      } | null
+      if (!fiber || typeof fiber !== 'object' || seen.has(fiber)) continue
+      seen.add(fiber)
+      let hook = fiber.memoizedState
+      for (let count = 0; hook && count < 100; count++) {
+        const value = hook.memoizedState
+        for (const candidate of [value, (value as { current?: unknown } | null)?.current]) {
+          if (candidate && typeof (candidate as MapLike).project === 'function' &&
+            typeof (candidate as MapLike).queryRenderedFeatures === 'function') {
+            map = candidate as MapLike
+            break
+          }
+        }
+        hook = hook.next as typeof hook
+        if (map) break
+      }
+      if (fiber.child) stack.push(fiber.child as typeof fiber)
+      if (fiber.sibling) stack.push(fiber.sibling as typeof fiber)
+    }
+    if (!map) return null
+
+    const fillLayer = map.getLayer('overlay-buildings-main')
+    const pointLayer = map.getLayer('overlay-buildings-main-points')
+    const layers = ['overlay-buildings-main', 'overlay-buildings-main-points']
+      .filter((id) => map?.getLayer(id) && map.getLayoutProperty(id, 'visibility') !== 'none')
+    if (!fillLayer || !pointLayer || map.getZoom() < Math.max(fillLayer.minzoom ?? 0, pointLayer.minzoom ?? 0)) return null
+
+    const container = map.getContainer().getBoundingClientRect()
+    const canvas = map.getCanvas()
+    const canvasBounds = canvas.getBoundingClientRect()
+    for (const candidate of points) {
+      const projected = map.project(candidate.point)
+      const clientX = container.left + projected.x
+      const clientY = container.top + projected.y
+      if (clientX < canvasBounds.left || clientX >= canvasBounds.right ||
+        clientY < canvasBounds.top || clientY >= canvasBounds.bottom) continue
+      if (document.elementFromPoint(clientX, clientY) !== canvas) continue
+      const hits = map.queryRenderedFeatures(projected, { layers })
+      if (hits.some((hit) => hit.properties?.bldg_id === candidate.featureId)) {
+        return { ...candidate, screen: [clientX, clientY] as [number, number] }
+      }
+    }
+    return null
+  }, candidates)
+}
+
 test('real authority renders bounded footprints and radar, then clears restricted data on sign-out', async ({ page }) => {
   const requests: string[] = []
   page.on('request', (request) => {
@@ -178,36 +330,25 @@ test('real authority renders bounded footprints and radar, then clears restricte
   await expect(page.getByRole('list', { name: 'Buildings legend' })).toBeVisible()
   const rendered = performance.now()
   await page.getByText('Layers', { exact: true }).click()
-  const bounds = await page.locator('.maplibregl-canvas').boundingBox()
-  if (!bounds) throw new Error('Authority map canvas unavailable.')
-  const bbox = new URL(response.url()).searchParams.get('bbox')!.split(',').map(Number)
-  const [west, south, east, north] = bbox
-  const mercator = (latitude: number) => Math.asinh(Math.tan(latitude * Math.PI / 180))
   const ids = new Set(collection.features.map(({ properties }) => properties.bldg_id))
-  let picked: string | undefined
-  for (const { geometry } of collection.features.slice(0, 35)) {
-    const coordinates = geometry?.coordinates as number[][][] | number[][][][] | undefined
-    const ring = geometry?.type === 'MultiPolygon' ? (coordinates as number[][][][])?.[0]?.[0]
-      : (coordinates as number[][][])?.[0]
-    if (!ring?.length) continue
-    const lon = ring.reduce((sum, point) => sum + point[0], 0) / ring.length
-    const lat = ring.reduce((sum, point) => sum + point[1], 0) / ring.length
-    const px = (lon - west) / (east - west)
-    const py = (mercator(north) - mercator(lat)) / (mercator(north) - mercator(south))
-    if (px < 0.1 || px > 0.9 || py < 0.1 || py > 0.9) continue
-    await page.mouse.click(bounds.x + px * bounds.width, bounds.y + py * bounds.height)
-    const panel = page.getByRole('region', { name: 'Selected map feature' })
-    if (await panel.isVisible()) {
-      const label = await panel.locator('strong').textContent()
-      if (!label?.startsWith('Buildings · ')) continue
-      picked = label.slice('Buildings · '.length)
-      expect(ids.has(picked)).toBeTruthy()
-      await expect(panel).toContainText('Vertical land motion')
-      await expect(panel).toContainText('Radar coverage')
-      break
-    }
-  }
-  expect(picked).toBeTruthy()
+  const candidates = buildingInteriorCandidates(collection)
+  expect(candidates.length, 'Building response had no valid polygon interior points').toBeGreaterThan(0)
+  const selectable = await findRenderedBuildingClick(page, candidates)
+  expect(selectable, 'No building interior was rendered and unobscured by map controls').toBeTruthy()
+  const target = selectable!
+  const picked = target.featureId
+  expect(ids.has(target.featureId)).toBeTruthy()
+  const confirmedAtClickPoint = await findRenderedBuildingClick(page, [target])
+  expect(confirmedAtClickPoint?.featureId, 'Target building is no longer rendered at the projected click point')
+    .toBe(target.featureId)
+  await page.mouse.click(...target.screen)
+  const panel = page.getByRole('region', { name: 'Selected map feature' })
+  await expect(panel).toBeVisible()
+  const selectedLabel = await panel.locator('strong').textContent()
+  expect(selectedLabel?.startsWith('Buildings')).toBeTruthy()
+  expect(selectedLabel?.split('·').at(-1)?.trim()).toBe(target.featureId.trim())
+  await expect(panel).toContainText('Vertical land motion')
+  await expect(panel).toContainText('Radar coverage')
   const beforeZoom = requests.length
   const updated = page.waitForResponse((result) => result.url().startsWith(api + '/buildings?') && result.ok())
   await zoom.evaluate((element) => {

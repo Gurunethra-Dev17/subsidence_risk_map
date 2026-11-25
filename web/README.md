@@ -34,48 +34,66 @@ The Vite development middleware binds to IPv4 loopback, allows same-origin read 
 
 The preview uses the labelled browser-print brief. Authority access and live radar require the authenticated backend. Data and figures are internal team material. Keep the preview on loopback without a tunnel. Starts with incompatible packages fail with a diagnostic and the browser exposes retry states for request failures. The normal development and production commands retain their existing mock or configured live API behavior. Production builds reject the preview mode.
 
-## Real E9 loopback integration
+## Real E9, E7 and E4 loopback integration
 
-Use E's backend checkpoint `3cbc30a15f9a44671a8527123c0d98bbea2973af`. Keep it in a separate detached checkout. The commands below use the existing external packages by absolute path. The backend opens these files directly, so there is no need to duplicate either Parquet export. Verify the handoff's `SHA256SUMS.txt` and `REQUIRED_EXISTING_SHA256.txt` before setup.
+The approved E7/E4 backend checkpoint is `33d106b883bfc592b0ba4dd1fa66f6e3ac78113d` from `origin/e/api-insar`. It includes the E4 geographic PDF correction at `82d6602`. Keep it detached in a separate worktree and reuse the existing Python 3.11 environment.
 
-Run these commands from the frontend repository root to create the isolated checkout.
+The E7 package is the **outer** `C:\Users\Roshan\Desktop\subsidence-data\qa_corrected` directory. Verify all eight entries in `SHA256SUMS.txt`. The loopback server reads `overlay_manifest.json` and `los_overlay.png` and pins both hashes. The API reads `api_fresh_data_status.json` directly. The handoff, QA summary, figures and GeoTIFF are audit inputs. The nested extraction is redundant.
 
-```powershell
-git fetch origin
-$frontend = (Get-Location).Path
-$backend = Join-Path $env:TEMP 'subsidence-e9-3cbc30a-isolated'
-git clone --shared --local --no-checkout $frontend $backend
-git -C $backend checkout --detach 3cbc30a15f9a44671a8527123c0d98bbea2973af
-Push-Location $backend
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e '.[api,integration]'
-.\.venv\Scripts\python.exe -m pip check
-@'
-import duckdb
-with duckdb.connect() as conn:
-    conn.execute("INSTALL httpfs")
-    conn.execute("LOAD httpfs")
-    conn.execute("INSTALL spatial")
-    conn.execute("LOAD spatial")
-    print("DuckDB spatial ready")
-'@ | .\.venv\Scripts\python.exe -
-Pop-Location
-```
+### Verify external resources and prepare the worktree
 
-You can use a verified existing Python 3.11 environment if disk space is limited. Always launch with the detached E9 checkout as the working directory so the Python API modules resolve to the exact checkpoint. In this workspace the earlier sibling checkout's `.venv\Scripts\python.exe` is a compatible alternative.
-
-In a PowerShell terminal from the frontend root, configure and start E9. Keep the terminal open for test execution and cleanup.
+Run in the first PowerShell terminal.
 
 ```powershell
-$frontend = (Get-Location).Path
-$backend = Join-Path $env:TEMP 'subsidence-e9-3cbc30a-isolated'
-$python = Join-Path $backend '.venv/Scripts/python.exe'
-# If using the verified existing environment, set $python to its full executable path.
-# $python = (Resolve-Path '..\subsidence_risk_map-c11-backend\.venv\Scripts\python.exe').Path
+$frontend = Join-Path $env:USERPROFILE 'Desktop/subsidence_risk_map'
 $packages = Join-Path $env:USERPROFILE 'Desktop/subsidence-data'
+$c5 = Join-Path $packages 'delhi-c5-local-testing-candidate-0.0.3'
 $d8 = Join-Path $packages 'delhi-c2-c3-person-c'
 $e9 = Join-Path $packages 'delhi-e9-person-c'
+$e7 = Join-Path $packages 'qa_corrected'
+function Confirm-Sha256($Path, $Expected) {
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash
+    if ($actual -ne $Expected) { throw "Checksum mismatch at ${Path}. Expected $Expected. Got $actual." }
+}
+function Confirm-Manifest($Root, $Manifest) {
+    $rows = Get-Content -LiteralPath (Join-Path $Root $Manifest) -ErrorAction Stop
+    foreach ($row in $rows) {
+        $digest, $name = $row -split '\s+', 2
+        Confirm-Sha256 (Join-Path $Root $name) $digest
+    }
+    Write-Output "$Manifest at $Root verified ($($rows.Count) entries)"
+}
+Confirm-Manifest $e7 'SHA256SUMS.txt'
+Confirm-Manifest $c5 'SHA256SUMS.txt'
+Confirm-Manifest $d8 'checksums.sha256'
+Confirm-Manifest $e9 'SHA256SUMS.txt'
+foreach ($row in Get-Content -LiteralPath (Join-Path $e9 'REQUIRED_EXISTING_SHA256.txt')) {
+    $digest, $name = $row -split '\s+', 2
+    $path = if ($name -eq 'out/delhi/buildings.parquet') { Join-Path $packages 'buildings.parquet' } else {
+        Join-Path $d8 ([IO.Path]::GetFileName($name))
+    }
+    Confirm-Sha256 $path $digest
+}
+Confirm-Sha256 (Join-Path $packages 'buildings.parquet') '3BDBCFF29B8269AF5363573BD99798B278D725E0E43083A85CE35DCEB9242531'
+Confirm-Sha256 (Join-Path $e7 'los_overlay.png') '20434023bc7de664608746a99a1bfe30b213d3f95e15b7e197c4f623d352f94e'
+
+Set-Location $frontend
+$checkpoint = '33d106b883bfc592b0ba4dd1fa66f6e3ac78113d'
+$backend = Join-Path $env:TEMP 'subsidence-e7-33d106b-backend'
+$python = Join-Path $env:USERPROFILE 'Desktop/subsidence_risk_map-c11-backend/.venv/Scripts/python.exe'
+git cat-file -e "$checkpoint^{commit}"
+if ($LASTEXITCODE) { git fetch origin e/api-insar }
+if (!(Test-Path -LiteralPath $backend)) { git worktree add --detach $backend $checkpoint }
+if ((git -C $backend rev-parse HEAD) -ne $checkpoint) { throw 'Backend checkpoint mismatch.' }
+& $python -B -c 'import fastapi, uvicorn, pydantic, reportlab, duckdb, pyarrow, httpx'
+if ($LASTEXITCODE) { throw 'The existing Python API environment is incomplete.' }
+```
+
+### Start the API
+
+Continue in the first terminal. The public ward routes and the authority route read the accepted datasets in place. Keep this terminal for teardown.
+
+```powershell
 $env:API_ENV = 'production'
 $env:API_WARD_SUMMARY_PATH = Join-Path $d8 'ward_summary.json'
 $env:API_CELL_SCORES_PATH = Join-Path $d8 'cell_scores.geojson'
@@ -83,17 +101,29 @@ $env:API_VALIDATION_SUMMARY_PATH = Join-Path $d8 'validation_summary.json'
 $env:API_BUILDING_METRICS_PATH = Join-Path $e9 'C1/building_metrics.parquet'
 $env:API_BUILDINGS_GEOMETRY_PATH = Join-Path $packages 'buildings.parquet'
 $env:API_C6_CONFIG_PATH = Join-Path $e9 'reference/configs/delhi.yaml'
-$env:API_CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173,https://subsidence-risk-map.vercel.app'
-Remove-Item Env:API_INSAR_MANIFEST_PATH -ErrorAction SilentlyContinue
+$env:API_CORS_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
+$env:API_INSAR_MANIFEST_PATH = Join-Path $e7 'api_fresh_data_status.json'
 $env:AUTHORITY_TOKEN = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+if (Get-NetTCPConnection -State Listen -LocalPort 8002 -ErrorAction SilentlyContinue) { throw 'Port 8002 is occupied.' }
 Push-Location $backend
-& $python -B -m api.preflight
-if ($LASTEXITCODE) { Pop-Location; throw 'E9 preflight failed.' }
-$e9Server = Start-Process -FilePath $python -WorkingDirectory $backend -ArgumentList '-B','-m','uvicorn','api.main:app','--host','127.0.0.1','--port','8002','--no-access-log' -WindowStyle Hidden -PassThru
-Pop-Location
+try {
+    & $python -B -m api.preflight
+    if ($LASTEXITCODE) { throw 'E9 preflight failed.' }
+    $e9Server = Start-Process -FilePath $python -WorkingDirectory $backend -ArgumentList '-B','-m','uvicorn','api.main:app','--host','127.0.0.1','--port','8002','--no-access-log' -WindowStyle Hidden -PassThru
+} finally { Pop-Location }
 ```
 
-Check [health](http://127.0.0.1:8002/api/v1/health) and [E9 Swagger](http://127.0.0.1:8002/api/v1/docs). The browser suite enters the temporary authority token from this process environment. For manual authority review, generate a fresh temporary value in a local password manager. Replace the token assignment in the setup above with the masked prompt below, then enter the same value in the masked Authority access form.
+At this checkpoint the expected preflight output is below. The `NOT_CHECKED` lines remain open validations.
+
+```text
+PREFLIGHT_OK
+NOT_CHECKED:c0_c1_dataset_wide_row_integrity
+NOT_CHECKED:c0_c1_id_set_equality
+NOT_CHECKED:parquet_row_values_and_nullability
+NOT_CHECKED:building_bbox_geometry_availability_when_c0_is_unconfigured
+```
+
+Check [health](http://127.0.0.1:8002/api/v1/health) and the [validation response](http://127.0.0.1:8002/api/v1/validation). The browser suite reads its temporary token from the test process environment. For manual authority review, generate a temporary value privately in a local password manager. Use the masked prompt below in place of the token assignment before backend startup, then enter the same value in the masked Authority access form.
 
 ```powershell
 $temporaryToken = Read-Host 'Temporary authority token' -AsSecureString
@@ -101,49 +131,110 @@ $env:AUTHORITY_TOKEN = [System.Net.NetworkCredential]::new('', $temporaryToken).
 $temporaryToken.Dispose()
 ```
 
-Keep the token out of Vite variables, terminal output, screenshots and browser storage.
+Keep the token out of Vite variables, terminal output, screenshots, URLs and browser storage. Start the geography and frontend from separate terminals with no authority token in their environment.
 
-In a separate terminal from the frontend root, serve the allowlisted B package. The server verifies the assets' SHA-256s and supports HEAD, single byte ranges, local CORS, and gzip fallbacks.
+### Start geography and the frontend
+
+Run in the second PowerShell terminal. The server binds only to `127.0.0.1:8003`. C5 keeps HEAD, single byte ranges, local CORS and gzip fallbacks. E7 requires one of the two local Vite origins and supports exactly two routes.
 
 ```powershell
-$env:DELHI_GEOGRAPHY_DIR = Join-Path $env:USERPROFILE 'Desktop/subsidence-data/delhi-c5-local-testing-candidate-0.0.3'
-python -B web/scripts/serve-e9-geography.py
+Set-Location (Join-Path $env:USERPROFILE 'Desktop/subsidence_risk_map')
+$packages = Join-Path $env:USERPROFILE 'Desktop/subsidence-data'
+$env:DELHI_GEOGRAPHY_DIR = Join-Path $packages 'delhi-c5-local-testing-candidate-0.0.3'
+$env:DELHI_E7_DIR = Join-Path $packages 'qa_corrected'
+$python = Join-Path $env:USERPROFILE 'Desktop/subsidence_risk_map-c11-backend/.venv/Scripts/python.exe'
+& $python -B web/scripts/serve-e9-geography.py
 ```
 
-Run the frontend from the repository root in a third terminal.
+Run in the third PowerShell terminal.
 
 ```powershell
-Set-Location web
+Set-Location (Join-Path $env:USERPROFILE 'Desktop/subsidence_risk_map/web')
+$env:VITE_E7_INTERNAL_PREVIEW = 'true'
 npm.cmd run dev:e9
 ```
 
-Open [the real E9 app](http://127.0.0.1:5173). This development mode pins the API to port 8002 and the geographical assets to port 8003. It requires accepted Delhi metadata and canonical ward IDs before enabling the map and authority access. Ward GeoJSON is preferred. If its transport fails, the ward PMTiles use live API colours and hover values by ID. The Grid cells control requests the selected ward from C4. Candidate cell tiles provide geometry only, and the E9 session retains all C2 cells, including the four slivers outside the candidate archive. The radar control is shown in Authority mode.
+Open [the real E9 app](http://127.0.0.1:5173). Preview mode requires accepted Delhi metadata and canonical ward IDs before enabling the map and authority access. Ward GeoJSON is preferred, with ward PMTiles as a transport fallback. The Grid cells control requests the selected ward from C4 and retains the C2 slivers outside the C5 archive. Authority mode controls historical radar and building access. E7 internal access follows the separate loopback configuration.
 
-For the E9 suite, stop the standalone Vite frontend with Ctrl+C and leave E9 and geography running. In the original E9 terminal:
+### Run the browser suites and stop the servers
+
+Stop manual Vite with Ctrl+C in the third terminal and leave the API and geography servers running. Run the real suite in the first terminal.
 
 ```powershell
-Set-Location (Join-Path $frontend 'web')
 $env:E9_TEST_AUTHORITY_TOKEN = $env:AUTHORITY_TOKEN
+$env:VITE_E7_INTERNAL_PREVIEW = 'true'
+$env:DELHI_ANALYTICS_DIR = $d8
 $env:PLAYWRIGHT_CHANNEL = 'msedge'
-npm.cmd run test:e9
-Remove-Item Env:E9_TEST_AUTHORITY_TOKEN
+Remove-Item Env:AUTHORITY_TOKEN
+Push-Location (Join-Path $frontend 'web')
+try { npm.cmd run test:e9 } finally {
+    Pop-Location
+    Remove-Item Env:E9_TEST_AUTHORITY_TOKEN, Env:VITE_E7_INTERNAL_PREVIEW -ErrorAction SilentlyContinue
+}
 ```
 
-The suite uses the running E9 API for ward, cell, PDF, validation and building assertions. It controls a few browser responses for failure-path checks. The Playwright Vite child receives neither token variable. Stop the geography server with Ctrl+C. In the original terminal run `Stop-Process -Id $e9Server.Id` and `Remove-Item Env:AUTHORITY_TOKEN`. Standard checks are `npm.cmd run lint`, `npm.cmd run build`, `npm.cmd run verify:assets`, and `npm.cmd test`. Use the separately documented settings for `npm.cmd run test:delhi` and `npm.cmd run test:live`.
+The suite uses real C4 responses and original E7 assets. Tests labelled controlled substitute only the failure responses. The Vite child receives empty token variables. To verify the actual `not_run` fallback, stop the API, clear `API_INSAR_MANIFEST_PATH`, generate a new temporary token and rerun the API and real browser suite with the internal preview flag disabled.
+
+Stop geography with Ctrl+C in the second terminal. In the first terminal stop only the API process created above.
+
+```powershell
+if ($e9Server -and !$e9Server.HasExited) { Stop-Process -Id $e9Server.Id }
+Remove-Item Env:AUTHORITY_TOKEN, Env:E9_TEST_AUTHORITY_TOKEN, Env:API_INSAR_MANIFEST_PATH, Env:VITE_E7_INTERNAL_PREVIEW -ErrorAction SilentlyContinue
+```
+
+Run standard quality checks in a clean terminal without the internal preview flag. The default Playwright suite includes the API-security cases. Run the candidate and live suites sequentially because both use port 5173.
+
+```powershell
+Set-Location (Join-Path $env:USERPROFILE 'Desktop/subsidence_risk_map/web')
+$env:PLAYWRIGHT_CHANNEL = 'msedge'
+npm.cmd run lint
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd run verify:assets
+npm.cmd test
+$packages = Join-Path $env:USERPROFILE 'Desktop/subsidence-data'
+$env:DELHI_GEOGRAPHY_DIR = Join-Path $packages 'delhi-c5-local-testing-candidate-0.0.3'
+$env:DELHI_ANALYTICS_DIR = Join-Path $packages 'delhi-c2-c3-person-c'
+npm.cmd run test:delhi
+# Start the synthetic API on port 8000 using the C11 instructions below, then run:
+npm.cmd run test:live
+git diff --check
+```
+
+### Interpretation and manual review
+
+E7 displays relative displacement along the satellite line of sight from one ascending VV interferogram spanning 4–16 November 2026. The 80 m source product was masked at exploratory coherence 0.30. The overlay is 1359 × 483 RGBA in EPSG:4326, uses nearest-neighbor rendering and keeps the approved pixel alpha. The display range is ±2.2467668056488037 cm using the 98th percentile of absolute display-grid values. The observed range on that grid is −3.9590609073638916 to +2.3064234256744385 cm. The thresholded native QA grid reaches +2.4771595001220703 cm. Endpoint colors saturate where the display scale is exceeded. The native masked values retain their range.
+
+Negative values are away from the sensor, zero is the midpoint, and positive values are toward the sensor. Missing or masked pixels are transparent. The nominal footprint covers about 48.7% of the ward union and usable pixels intersect about 19.3%. Usable area is about 69.8% in Bijwasan (131) and 38.8% in Mahipalpur (133). QA records usable observations in 49 wards and none in 201.
+
+The result is derived from unwrapped phase. It measures relative LOS motion and cannot establish vertical subsidence. Independent ground truth, historical pattern and sign comparisons, annualization and independent phase-reference verification are absent. Processing omitted atmospheric correction and had the water mask disabled during unwrapping. Unwrapping errors are possible and the supplied metadata leaves the relative orbit and perpendicular baseline unspecified. Ward and cell risk assessment continues to use C2. The E7 handoff records `processing_status=processed`, `fresh_data_check_status=not_run` and `api_status=processed_not_validated`.
+
+Attribution as supplied by the package.
+
+> ASF DAAC HyP3 2026 using hyp3_isce2 3.0.2 / ISCE 2.6.5. Contains modified Copernicus Sentinel data 2026, processed by ESA.
+
+- Verify 250 wards, search, rank sort and filters. Select Bijwasan from the table and then from the map. Check the Inspector, rank range, indicator units and unavailable values.
+- Open Layers using the keyboard. Confirm Fresh InSAR Observation starts off, enables independently of Grid cells and keeps ward outlines and the active ward visible. Check the legend, dates, coverage, attribution and transparent areas.
+- Switch light and dark appearance and street styles, then 2D and 3D. Confirm selection and layer state survive style switches. Check Layers at a narrow width and verify the ward-plan fallback with WebGL disabled.
+- In Validation, check the processed wording and historical robustness and literature panels. With the optional API manifest absent, verify the fresh-data check reads “not run.”
+- For Bijwasan, Mahipalpur and an insufficient-data ward such as Dakshin Puri, preview and download the E4 PDF. Check the ward ID, geographic cell map, suppression legend, unavailable indicators, eligible cell rows and caveats. Simulate a PDF request failure locally and confirm Print / Save as PDF uses the labelled browser fallback.
+- Confirm public mode hides historical radar and authority building controls. Enter a valid temporary token, inspect real polygons and metrics, then sign out and reload. Confirm public mode resumes and the token is absent from the URL and browser storage.
+- Visit the brief and methods, then use browser back and forward. Check responsive layouts and visible loading, error and retry states.
+
+Keep the E7 files on loopback without a tunnel or static hosting. The authority token protects the API buildings route. The static E7 permission model is the internal handoff, the local origin allowlist and the explicit preview opt-in.
 
 ## C11 local API integration
 
-With Python 3.11 available, run these commands from the frontend repository root to set up the sibling worktree.
+For synthetic live regression, use a separate PowerShell terminal with the detached worktree and Python environment prepared above. This API listens on port 8000.
 
 ```powershell
-git fetch origin e/api-insar:refs/remotes/origin/e/api-insar
-git worktree add --detach ../subsidence_risk_map-c11-backend origin/e/api-insar
-Set-Location ../subsidence_risk_map-c11-backend
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e '.[api,dev,integration]'
+$backend = Join-Path $env:TEMP 'subsidence-e7-33d106b-backend'
+$python = Join-Path $env:USERPROFILE 'Desktop/subsidence_risk_map-c11-backend/.venv/Scripts/python.exe'
+Set-Location $backend
+Remove-Item Env:API_WARD_SUMMARY_PATH, Env:API_CELL_SCORES_PATH, Env:API_VALIDATION_SUMMARY_PATH, Env:API_BUILDING_METRICS_PATH, Env:API_BUILDINGS_GEOMETRY_PATH, Env:API_C6_CONFIG_PATH, Env:API_INSAR_MANIFEST_PATH, Env:AUTHORITY_TOKEN -ErrorAction SilentlyContinue
 $env:API_ENV = 'dev'
 $env:API_CORS_ORIGINS = 'http://localhost:5173'
-.\.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+& $python -B -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
 In a second terminal, run `npm run dev:live` from `web/` and open [http://localhost:5173](http://localhost:5173). This mode defaults to [the loopback API](http://127.0.0.1:8000/api/v1/health). Its health indicator reports liveness. Rankings, ward details, cells, validation and ward PDFs use HTTP responses from the local process.
@@ -153,6 +244,8 @@ The backend's development artifacts contain fictional Delhi demo wards and metri
 Run `npm run test:live` with the backend running and frontend port 5173 free. Playwright starts the frontend and checks the seven public routes, the map and PDF flow, loading and retry, and CORS with unauthenticated buildings rejection. For successful authenticated testing, have the developer inject `AUTHORITY_TOKEN` into the backend process and enter the same token privately in the Authority access dialog. The token goes in the `X-Authority-Token` header of the protected `GET /buildings` request.
 
 The buildings request requires a bounding box. The bundled C1 building metrics lack coordinates, so the backend also needs compatible C0 geometry configured via `API_BUILDINGS_GEOMETRY_PATH` or location-enabled C1 metrics.
+
+Stop the synthetic server with Ctrl+C in its own terminal.
 
 ## Contracts and fixtures
 
@@ -232,6 +325,30 @@ Playwright starts the mock production preview on port 4173 and a second producti
 Publish only `web/dist/` from a clean build. The app uses a single entry URL and client-side view state. The included `public/_headers` supplies cache and security headers on compatible hosts. On other hosts, configure those headers directly. Revalidate HTML, cache hashed assets immutably and serve JavaScript workers with the correct MIME type. The host should serve the app over HTTPS and must keep `/api/v1/*` out of any HTML fallback.
 
 Produce separate builds for mock and live previews. Set `VITE_MOCK_MODE=false` and `VITE_API_URL` at build time for live mode. If the API is on a separate origin, allow the deployed frontend origin, `GET`, `OPTIONS`, and `X-Authority-Token` in CORS. Use the real Delhi handoff settings above for the public map sources.
+
+### Git-connected deployment handoff for Person A
+
+| Setting | Value |
+| --- | --- |
+| GitHub repository | `Gurunethra-Dev17/subsidence_risk_map` |
+| Production branch | `main` |
+| Root and framework | `web`, Vite |
+| Install command | `npm ci --engine-strict` |
+| Build command | `npm run build && npm run verify:assets` |
+| Output directory | `dist` |
+| Public API | `VITE_API_URL` set to Person E’s approved HTTPS Render URL with `/api/v1` |
+| Data matching | `VITE_MOCK_MODE=false`, `VITE_REQUIRE_REAL_DELHI=true`, `VITE_DELHI_DATA_VINTAGE=delhi-candidate-0.0.1` for the accepted E9 release |
+| C5 geography | Approved HTTPS `VITE_WARDS_GEOJSON_URL` and `VITE_WARDS_TILE_URL`. Set `VITE_WARD_GEOJSON_FALLBACK_URL` and `VITE_DELHI_MAP_ATTRIBUTION` from the approved release. Supply `VITE_POINTS_TILE_URL` only for the approved historical radar release. Leave `VITE_CELLS_TILE_URL` blank for E9. |
+| E7 configuration | Leave `VITE_E7_INTERNAL_PREVIEW` disabled. Public delivery requires confirmed redistribution terms and a separate approved HTTPS artifact-delivery design. |
+
+Person A can connect Vercel to the private repository through their authorized GitHub installation. Before any real-data release, obtain the exact production API and C5 URLs from the dataset owners and confirm the backend checkpoint, data vintage and redistribution scope. The current Render deployment’s contents require independent confirmation. The E7 PNG is outside the frozen C4 API. Public E7 delivery depends on team approval of both redistribution and the access policy for the PNG and metadata.
+
+Configure API CORS for the final frontend origin and the authority header. Serve the approved C5 archives with single byte Range support, valid `206` and `Content-Range`, CORS with exposed `Accept-Ranges`, `Content-Range` and `Content-Length`, and gzip `Content-Encoding` for per-ward fallbacks. Preserve data at the approved versioned paths. Keep the authority token on the API side.
+
+- Confirm the Vercel project builds `main` from `web`, passes the asset audit and returns 404 for nonexistent artifact paths.
+- Check the real Render `/health`, `/meta` and `/validation`, plus 250 ward records with the accepted vintage, rank order and C2 cell scores. Verify the PDF endpoint, including preview and download.
+- Probe the deployed origin’s CORS preflight, PMTiles range response and gzip ward fallback. Check ward selection and the map on desktop and mobile, including alternate themes and the WebGL fallback.
+- Verify public rejection for buildings, then test authenticated polygons and sign-out with a privately provisioned token. Confirm no artifacts or tokens are present in the production bundle.
 
 ### Synthetic preview deployment
 

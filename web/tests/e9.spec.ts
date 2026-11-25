@@ -98,7 +98,11 @@ test('real E9 wards, scoped cells, inspector, PDF and evidence render from live 
   await expect(page.getByText(/35\.29%.*41\.18%.*23\.53%/)).toBeVisible()
   await page.getByRole('link', { name: 'Validation', exact: true }).click()
   await expect(page.getByText('0.9241')).toBeVisible()
-  await expect(page.getByText(/Fresh-data check/)).toContainText('not run')
+  if (process.env.VITE_E7_INTERNAL_PREVIEW?.trim().toLowerCase() === 'true') {
+    await expect(page.getByText('Fresh observation processed — not independently validated.', { exact: true })).toBeVisible()
+  } else {
+    await expect(page.getByText(/Fresh-data check/)).toContainText('not run')
+  }
   await expect(page.getByText('Comparison matrix unavailable.')).toBeVisible()
   console.log('E9 timings (ms)', {
     list: Math.round(listReady - start), map: Math.round(mapReadyAt - start), selection: Math.round(selectedAt - selectStart),
@@ -249,7 +253,11 @@ test('controlled 429 and incompatible metadata require an explicit retry without
   await expect(page.locator('.ward-select')).toHaveCount(250)
   expect(count).toBe(3)
   await page.route(api + '/wards/*/brief.pdf', (route) => route.fulfill({ status: 503 }))
+  await page.evaluate(() => { window.print = () => document.body.setAttribute('data-print-verified', 'true') })
   await page.locator('.ward-select').first().click()
   await page.getByRole('link', { name: 'Open Inspection Brief' }).click()
   await expect(page.getByText('API PDF unavailable · browser print fallback')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Download PDF' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Print / Save as PDF' }).click()
+  await expect(page.locator('body')).toHaveAttribute('data-print-verified', 'true')
 })

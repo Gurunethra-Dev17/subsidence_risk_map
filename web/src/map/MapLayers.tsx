@@ -9,6 +9,7 @@ import { config } from '../config'
 import { makeOverlayLayers, overlayHitLayers, overlayLayerId, overlayLegends, overlaySelection, overlaySettings, overlaySourceId } from './overlayLayers'
 import type { OverlayKey } from './overlayLayers'
 import { selectedLine } from './wardLayers'
+import FreshInsar from './FreshInsar'
 
 type Viewport = { zoom: number; bbox: string }
 type LayerStatus = 'off' | 'zoom' | 'loading' | 'empty' | 'ready' | 'unavailable' | 'error' | 'busy'
@@ -212,6 +213,7 @@ export default memo(function MapLayers({ map, wardId, realMap, authority, onUnau
         <option value="auto">Follow appearance</option><option value="street">Light streets</option><option value="dark">Dark streets</option>
       </select></label>
       <LayerToggle layer="cells" {...shared} />
+      {import.meta.env.DEV && config.freshInsar && <FreshInsar map={map} />}
       {(config.mock || authority) && <LayerToggle layer="points" {...shared} />}
       {authority && <LayerToggle layer="buildings" {...shared} />}
     </div>

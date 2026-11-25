@@ -1,5 +1,6 @@
 interface ImportMetaEnv {
   readonly VITE_MOCK_MODE?: string
+  readonly VITE_E7_INTERNAL_PREVIEW?: string
   readonly VITE_API_URL?: string
   readonly VITE_DELHI_DATA_VINTAGE?: string
   readonly VITE_DELHI_MAP_ATTRIBUTION?: string

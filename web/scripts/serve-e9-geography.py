@@ -1,10 +1,11 @@
-"""Serve the approved C0/C5 candidate assets on IPv4 loopback."""
+"""Serve approved C0/C5 geography and optional internal E7 artifacts on IPv4 loopback."""
 
 import hashlib
 import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -14,6 +15,14 @@ from pipeline.serve_tiles import _parse_byte_range, _write_stream_chunks
 HOST = "127.0.0.1"
 PORT = 8003
 ORIGINS = {"http://127.0.0.1:5173", "http://localhost:5173"}
+E7_FILES = {
+    "overlay_manifest.json": (
+        "application/json", "8bbbf1824ad3455044edb3ee951af95cafe2a0996b4ead3cdc8bcc8900498fee"
+    ),
+    "los_overlay.png": (
+        "image/png", "20434023bc7de664608746a99a1bfe30b213d3f95e15b7e197c4f623d352f94e"
+    ),
+}
 
 
 def approved_assets(root):
@@ -57,6 +66,27 @@ def approved_assets(root):
     return assets
 
 
+def approved_e7_assets(directory):
+    candidate = Path(directory)
+    if not candidate.is_absolute():
+        raise ValueError("Set DELHI_E7_DIR to the absolute outer E7 package directory.")
+    root = candidate.resolve(strict=True)
+    if root.is_relative_to(Path(__file__).resolve().parents[2]):
+        raise ValueError("The E7 package must live outside the repository.")
+    assets = {}
+    for name, (content_type, expected) in E7_FILES.items():
+        path = (root / name).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError("An E7 artifact is outside its package or is not a regular file.")
+        data = path.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != expected:
+            raise ValueError(f"E7 checksum mismatch for {name}: expected {expected}; got {actual}.")
+        # Serve the verified bytes even if the package changes after startup.
+        assets["/e7/" + name] = (data, content_type, None)
+    return assets
+
+
 def serve(assets):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -78,12 +108,20 @@ def serve(assets):
             if self.headers.get("Host") != f"{HOST}:{PORT}" or (origin and origin not in ORIGINS):
                 self.send_error(403)
                 return
-            asset = assets.get(urlsplit(self.path).path)
+            path = urlsplit(self.path).path
+            if path.startswith("/e7/"):
+                if origin not in ORIGINS:
+                    self.send_error(403)
+                    return
+                if self.path != path:
+                    self.send_error(404)
+                    return
+            asset = assets.get(path)
             if not asset:
                 self.send_error(404)
                 return
             target, content_type, encoding = asset
-            size = target.stat().st_size
+            size = len(target) if isinstance(target, bytes) else target.stat().st_size
             byte_range = _parse_byte_range(self.headers.get("Range"), size)
             if self.command == "OPTIONS":
                 self.send_response(204)
@@ -109,10 +147,11 @@ def serve(assets):
             self.send_header("Access-Control-Allow-Headers", "Range")
             self.send_header("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length")
             self.send_header("Cache-Control", "private, no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             if self.command == "GET" and byte_range is not False:
                 try:
-                    with target.open("rb") as file:
+                    with (BytesIO(target) if isinstance(target, bytes) else target.open("rb")) as file:
                         file.seek(start)
                         _write_stream_chunks(file, self.wfile, length)
                 except ConnectionError:
@@ -131,7 +170,11 @@ if __name__ == "__main__":
         root = os.environ.get("DELHI_GEOGRAPHY_DIR")
         if not root or not Path(root).is_absolute():
             raise ValueError("Set DELHI_GEOGRAPHY_DIR to the absolute package directory.")
-        serve(approved_assets(Path(root).resolve(strict=True)))
+        assets = approved_assets(Path(root).resolve(strict=True))
+        e7 = os.environ.get("DELHI_E7_DIR")
+        if e7:
+            assets.update(approved_e7_assets(e7))
+        serve(assets)
     except KeyboardInterrupt:
         pass
     except (OSError, ValueError, KeyError) as error:

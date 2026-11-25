@@ -110,6 +110,7 @@ function Methodology({ meta }: { meta?: Api['MetaResponse'] }) {
 
 function Validation({ data, meta }: { data: Api['ValidationSummary']; meta?: Api['MetaResponse'] }) {
   const { vt_consistency: comparison, collapse_check: incidents, robustness, fresh_data_check: fresh } = data
+  const freshStatus = fresh?.status
   const matrix = comparison.confusion_matrix
   const showMatrix = comparison.labels.length > 0 && matrix.length === comparison.labels.length &&
     matrix.every((row) => row.length === comparison.labels.length && row.every(numeric))
@@ -148,7 +149,10 @@ function Validation({ data, meta }: { data: Api['ValidationSummary']; meta?: Api
       <p>Weight sensitivity mean Kendall τ <strong>{numeric(robustness.kendall_tau_weights_mean) ? robustness.kendall_tau_weights_mean.toFixed(4) : 'Unavailable'}</strong> · Median rank-range width <strong>{valueText(robustness.rank_range_width_median)}</strong></p>
       {radii.length ? <MetricChart rows={radii} label="Kendall τ" min={-1} /> : <p className="muted-copy">Radius sensitivity scores unavailable.</p>}
       {unavailableRadii.length > 0 && <p>Kendall τ unavailable at {unavailableRadii.join(', ')}.</p>}
-      <p>Fresh-data check <strong className="capitalize">{fresh.status.replaceAll('_', ' ')}</strong>. {fresh.note}</p>
+      {freshStatus === 'processed_not_validated'
+        ? <p><strong>Fresh observation processed — not independently validated.</strong> {typeof fresh.note === 'string' && fresh.note}</p>
+        : <p>Fresh-data check <strong className="capitalize">{freshStatus === 'not_run' ? 'not run' : freshStatus === 'not_submitted' ? 'not submitted' : 'unavailable'}</strong>.
+          {' '}{(freshStatus === 'not_run' || freshStatus === 'not_submitted') && typeof fresh?.note === 'string' && fresh.note}</p>}
       <h3>Published hotspot checks</h3>
       <p>These literature references provide a descriptive comparison. Independent predictive validation requires separate evidence.</p>
       {data.hotspot_check.length ? <ul className="hotspot-list">{data.hotspot_check.map((hotspot, i) => <li key={i}>
